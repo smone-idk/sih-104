@@ -93,6 +93,19 @@ make frontend
 Health: `curl localhost:8000/api/v1/health`
 Inventory: `curl localhost:8000/api/v1/inventory`
 
+### Batch analysis (CLI)
+
+```bash
+cd backend
+.venv/bin/python analyze.py ../demo_assets/genuine/enrolled_1272_1272-128104-0002.wav --summary
+.venv/bin/python analyze.py clip.mp3                       # full JSON on stdout
+.venv/bin/python analyze.py clip.wav --telephony --snr 15  # §8 degradation chain
+.venv/bin/python analyze.py clip.wav --no-profile          # ignore enrolled profile
+```
+
+The CLI, the (later) WebSocket stream and the simulation all run the **same**
+`voiceshield.pipeline` code.
+
 ---
 
 ## Project layout
@@ -130,8 +143,8 @@ Built in strict order; a phase does not start until the previous gate passes
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 0 | Scaffold, fetch_models, build_demo_assets, SQLite schema, startup inventory | Boots offline; prints accurate detector list with device |
-| 1 | Batch pipeline as a CLI (`python analyze.py clip.wav` → JSON) | Two clips → two different explainable scores; detector tests pass |
+| 0 ✅ | Scaffold, fetch_models, build_demo_assets, SQLite schema, startup inventory | Boots offline; prints accurate detector list with device |
+| 1 ✅ | Batch pipeline as a CLI (`python analyze.py clip.wav` → JSON) | Two clips → two different explainable scores; detector tests pass |
 | 2 | WebSocket streaming + Live Analysis screen | Genuine clip LOW, cloned clip higher, no controls touched |
 | 3 | Whisper worker + context engine + explainability | Every context flag traces to a transcript quote |
 | 4 | Policy engine, mock approval blocked at API, challenge-response, incident log | `curl POST /approve` → 403 while risk HIGH |

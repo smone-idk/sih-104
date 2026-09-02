@@ -122,3 +122,18 @@ _(updated at the end of each build phase)_
     500 ms target — optimization deferred to Phase 1.
   - `AASIST.pth` is loaded with `torch.load(weights_only=False)` (it is
     clovaai's own MIT checkpoint, a plain state-dict pickle).
+- **Phase 1:**
+  - VAD is an energy gate (relative noise-floor + −45 dBFS absolute floor), not
+    a learned model. Room noise above the floor counts as speech; silero-VAD is
+    a drop-in upgrade tracked for a later phase.
+  - Batch aggregation = **mean of each detector over speech windows**, then one
+    fusion. Simple and explainable; a max/percentile aggregate would be more
+    alarmist. Streaming (Phase 2) keeps the per-window EMA.
+  - Absolute scores are only meaningful once the speaker profile **and** context
+    layers are active. On a lone genuine clip with neither, AASIST's ~0.3–0.65
+    spoof-prob on clean genuine speech (a known ASVspoof-2019 calibration gap)
+    dominates the redistributed weight and lands the clip in MEDIUM. The
+    Evaluation page (Phase 6) measures this; the demo always runs with a profile.
+  - Telephony µ-law degradation inflates AASIST spoof-probability markedly
+    (0.65 → 0.96 on one genuine clip) — the narrowband generalization gap. This
+    is surfaced in the §8 before/after view, not corrected for.

@@ -30,3 +30,4 @@ intent. They exist as text so they can be regenerated in any voice / language.
 ## Generated clips
 
 <!-- build_demo_assets.py appends dated lines here -->
+- 2026-09-02  genuine/  LibriSpeech dev-clean (CC BY 4.0), 2 speakers. Enrolled speaker id=1272 labelled 'Rajesh Sharma — CFO'.

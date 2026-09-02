@@ -77,7 +77,61 @@ representative, real numbers come with real audio in Phase 1):
 ## Phase 1 — Batch pipeline (CLI)
 
 **Gate:** Two different clips give two different, explainable scores; detector
-unit tests pass. — _not started_
+unit tests pass. — ✅ **PASSED** (2026-09-02)
+
+**What works:**
+- `backend/analyze.py clip.{wav,mp3,m4a,flac,ogg}` → full analysis JSON (or
+  `--summary`). WAV/FLAC/OGG via `soundfile`; MP3/M4A/AAC via PyAV — **no system
+  ffmpeg** (verified decoding transcoded `.m4a` and `.ogg`).
+- `voiceshield/pipeline.py` — the single path (`analyze_audio`) that streaming
+  and simulation will reuse (§14). Batch = 4 s / 1 s-hop windows → mean each
+  detector over speech windows → fuse once → explainability + per-window
+  timeline (raw + EMA) for the chart.
+- `ingest/`: `audio.py` (load/resample), `vad.py` (energy + abs-floor gate,
+  heuristic), `chunker.py` (sliding window), `telephony.py` (8 kHz + G.711
+  µ-law + optional noise, deterministic).
+- `fusion/scorer.py` — weighted linear blend, **weight redistribution** for
+  unavailable layers (no fake values), bands LOW/MED/HIGH, per-component
+  raw value / weight / effective weight / contribution points sorted by
+  contribution, disclaimer string. `fusion/smoothing.py` — EMA (α=0.3).
+- `store/repo.py` — voice-profile CRUD (embedding only), directory lookup,
+  session insert.
+- **33 unit tests pass** — detector known-input/known-output fixtures
+  (synthetic heuristic, AASIST, ECAPA, prosody), fusion math + redistribution +
+  bands, ingest (window math, VAD, telephony), pipeline gate.
+
+**Gate evidence** (real LibriSpeech clips, `VOICESHIELD_OFFLINE=true`):
+
+| clip | speaker vs enrolled profile (1272) | score | band | top contributor |
+|---|---|---|---|---|
+| `enrolled_1272_…-0002.wav` | same speaker | **15.1** | LOW | voice_authenticity 7.96 pts (speaker sim ≈ 1.0 → 0 suspicion) |
+| `genuine_1462_…-0000.wav` | different speaker | **55.7** | MEDIUM | speaker_consistency 32.9 pts (cos ≈ 0.01 → 0.99 suspicion) |
+
+Two different clips → two different, fully explainable scores. ✔
+
+**Measured latencies** (per 4 s window, real audio, models warm):
+- `synthetic_speech` (AASIST, CUDA): **~45 ms** (target <200 ms) ✔
+- `speaker_consistency` (ECAPA, CUDA): **~27–37 ms** ✔
+- `prosody_anomaly` (CPU): **~80–230 ms** (target <500 ms) ✔ — the Phase 0
+  ~600 ms was cold-start on a zero clip; warm on real audio it is fine, no
+  optimization needed.
+- `load_audio`: 3–5 ms. `telephony degrade`: ~520 ms one-off per clip.
+
+**Compromises / observations:**
+- Without the speaker profile **and** context layers (Phase 3), absolute scores
+  on lone genuine clips land MEDIUM (~55–60): AASIST alone reports spoof-prob
+  ~0.3–0.65 on clean genuine LibriSpeech and, with only 2 acoustic layers live,
+  carries 0.75 effective weight. The **discriminative** behaviour is correct
+  (matches profile → LOW; different speaker → elevated); absolute calibration is
+  a known gap the Evaluation page (Phase 6) will quantify. Not papered over.
+- Telephony 8 kHz + µ-law pushed the same genuine clip 60 → **85 (HIGH)**:
+  AASIST spoof-prob 0.65 → 0.96. This is the ASVspoof-2019-trained-model
+  narrowband gap (§8) — shown, not hidden.
+- VAD is an energy gate with a −45 dBFS absolute floor. Noisy room recordings
+  above that floor will be treated as speech; a learned VAD (silero) is a
+  drop-in upgrade, tracked for a later phase.
+- Prosody baseline is estimated from only 6 clips / 2 speakers (`--quick` demo
+  set). Wider baseline needs the full `build_demo_assets.py` run.
 
 ## Phase 2 — WebSocket streaming + Live Analysis
 

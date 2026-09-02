@@ -53,7 +53,13 @@ test: ## run backend unit tests
 	cd backend && .venv/bin/pytest -q
 
 grep-honesty: ## fail if a hardcoded score timeline exists anywhere (§1, §16)
-	@! grep -RInE '(score|risk)\s*=\s*[0-9]{2,}|if\s*\(?\s*t\s*[<>]=?\s*[0-9]+\s*\)?\s*(score|risk)' \
+	@# a score/risk var whose ENTIRE right-hand side is a numeric literal, or a
+	@# time-gated score assignment. Formulas (score = 100 * sum(...)) are fine.
+	@# matches score/risk = <10..99>  (a rigged demo value), or a time-gated
+	@# score assignment. Trivial bounds/inits (0, 0.0, 1.0, 100) don't match.
+	@! grep -RInE \
+	  '\b(score|risk|final_score|raw_score|ema_score)\s*=\s*[1-9][0-9](\.[0-9]+)?\s*(#.*)?$$|\bif\b[^#\n]*\bt\b[^#\n]*[<>]=?[^#\n]*[0-9][^#\n]*\b(score|risk)\s*=' \
+	  --include='*.py' --include='*.ts' --include='*.tsx' \
 	  backend/voiceshield scripts frontend/src 2>/dev/null || \
 	  (echo "FOUND a suspicious hardcoded score — investigate above" && exit 1)
 	@echo "no hardcoded score timeline found"
