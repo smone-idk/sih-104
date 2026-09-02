@@ -1,0 +1,33 @@
+# VoiceShield backend — Python 3.11
+# Install torch separately (see README): CUDA build or CPU build.
+
+# --- web ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+websockets==14.1
+httpx==0.28.1
+
+# --- audio / DSP ---
+numpy==1.26.4
+scipy==1.14.1
+soundfile==0.12.1          # bundles libsndfile in the wheel
+librosa==0.10.2.post1
+av==13.1.0                 # bundles ffmpeg libs — decodes mp3/m4a without a system ffmpeg
+praat-parselmouth==0.4.5
+resampy==0.4.3
+
+# --- ML ---
+# torch / torchaudio installed out-of-band (see README / scripts/setup.sh)
+speechbrain==1.0.2
+faster-whisper==1.1.0
+huggingface-hub==0.27.0
+onnxruntime==1.20.1        # used by the silero-vad helper only
+
+# --- misc ---
+pytest==8.3.4
+requests==2.32.3
+rich==13.9.4               # startup detector inventory table
+tqdm==4.67.1

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# VoiceShield local state
+/models/**
+!/models/.gitkeep
+/data/**
+!/data/.gitkeep
+/demo_assets/**
+!/demo_assets/scripts/**
+!/demo_assets/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+.env
+
+# OS
+.DS_Store
+
+# TS build info
+frontend/tsconfig.tsbuildinfo
