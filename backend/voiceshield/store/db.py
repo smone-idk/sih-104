@@ -24,7 +24,7 @@ def init_db() -> Path:
     s = get_settings()
     conn = connect()
     try:
-        conn.executescript(_SCHEMA.read_text())
+        conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
         conn.commit()
     finally:
         conn.close()

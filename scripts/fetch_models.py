@@ -66,10 +66,10 @@ def _patch_ecapa_hyperparams(target: Path) -> None:
     from the local dir instead of trying to fetch from the HF Hub — required for
     fully-offline startup."""
     y = target / "hyperparams.yaml"
-    txt = y.read_text()
+    txt = y.read_text(encoding="utf-8")
     patched = txt.replace("!ref <pretrained_path>/", "")
     if patched != txt:
-        y.write_text(patched)
+        y.write_text(patched, encoding="utf-8")
         print("  patched hyperparams.yaml for offline load")
 
 
@@ -123,6 +123,24 @@ def fetch_aasist(check: bool) -> bool:
     return ok or all_ok  # non-fatal: heuristic fallback exists
 
 
+def check_silero() -> bool:
+    """Silero VAD weights ship inside the `silero-vad` wheel — nothing to fetch,
+    but verify they are importable so offline startup cannot surprise us."""
+    try:
+        from pathlib import Path as _P
+
+        import silero_vad
+
+        data = _P(silero_vad.__file__).parent / "data"
+        ok = any(data.glob("*.jit")) or any(data.glob("*.onnx"))
+        print(f"[{'ok' if ok else 'FAIL'}] Silero VAD bundled weights at {data}")
+        return ok
+    except Exception as exc:
+        print(f"[MISSING] silero-vad not installed ({exc}) — "
+              "VAD will fall back to the energy gate")
+        return False
+
+
 def _ensure_pkg(target: Path) -> None:
     (target / "models" / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
     (target / "models" / "__init__.py").touch(exist_ok=True)
@@ -140,6 +158,7 @@ def main() -> int:
         "ECAPA-TDNN (speaker, Tier A)": fetch_ecapa(args.check),
         "faster-whisper (ASR, Tier A)": fetch_whisper(args.check),
         "AASIST (anti-spoofing, Tier B — heuristic fallback OK)": fetch_aasist(args.check),
+        "Silero VAD (bundled in the wheel)": check_silero(),
     }
     print("\n=== summary ===")
     for name, ok in results.items():

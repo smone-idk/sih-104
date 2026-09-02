@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     asr_min_segment_seconds: float = 3.0
     asr_max_segment_seconds: float = 6.0
 
+    # --- VAD (§Phase 1.5 Task C) — "silero" (trained, default) | "energy" ---
+    vad_backend: str = "silero"
+    vad_threshold: float = 0.5
+    vad_min_speech_ms: int = 250
+    vad_min_silence_ms: int = 100
+    vad_speech_pad_ms: int = 30
+    #: a window needs at least this fraction of speech frames to be scored
+    window_speech_ratio: float = 0.25
+
     # --- fusion weights (§6) — expert-elicited priors, editable at runtime ---
     weight_voice_authenticity: float = 0.30
     weight_speaker_consistency: float = 0.20

@@ -56,7 +56,7 @@ class ProsodyAnomalyDetector(Detector):
         s = get_settings()
         bpath = s.model_cache_dir / "prosody_baseline.json"
         if bpath.exists():
-            raw = json.loads(bpath.read_text())
+            raw = json.loads(bpath.read_text(encoding="utf-8"))
             self._baseline = {k: tuple(v) for k, v in raw["features"].items()}
             self._baseline_source = (
                 f"{bpath.name} (n={raw.get('n_clips', '?')} genuine clips)"

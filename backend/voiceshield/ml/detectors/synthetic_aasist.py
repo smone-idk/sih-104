@@ -61,7 +61,7 @@ class AasistSyntheticDetector(SyntheticSpeechDetector):
             }
             if config_json.exists():
                 try:
-                    model_config = json.loads(config_json.read_text())["model_config"]
+                    model_config = json.loads(config_json.read_text(encoding="utf-8"))["model_config"]
                 except Exception:
                     pass
 

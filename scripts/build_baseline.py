@@ -53,7 +53,7 @@ def main() -> int:
     out.write_text(json.dumps(
         {"n_clips": len(clips), "features": baseline,
          "source": "demo_assets/genuine (LibriSpeech dev-clean / Common Voice)"},
-        indent=2))
+        indent=2), encoding="utf-8")
     print(f"\n[ok] wrote {out} from {len(clips)} genuine clips")
     return 0
 

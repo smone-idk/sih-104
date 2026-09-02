@@ -18,12 +18,13 @@ from typing import Any
 import numpy as np
 
 from .config import get_settings
+from .fusion.findings import Finding, derive_findings
 from .fusion.scorer import ComponentInput, FusionResult, fuse
 from .fusion.smoothing import EMA
 from .ingest.audio import load_audio
 from .ingest.chunker import iter_windows
 from .ingest.telephony import TelephonyConfig, degrade
-from .ingest.vad import speech_mask, speech_ratio
+from .ingest import vad as vad_mod
 from .ml.registry import get_registry
 
 # detector name -> fusion component it feeds
@@ -61,6 +62,9 @@ class AnalysisResult:
     windows: list[WindowScore]
     detector_means: dict[str, float | None]
     latency_ms: dict[str, float]
+    findings: list[Finding] = field(default_factory=list)
+    voice_verdict: str = "INDETERMINATE"
+    vad_backend: str = ""
     context: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -76,6 +80,9 @@ class AnalysisResult:
             "telephony_degraded": self.telephony_degraded,
             "score": round(self.fusion.score, 2),
             "band": self.fusion.band,
+            "voice_verdict": self.voice_verdict,
+            "findings": [f.as_dict() for f in self.findings],
+            "vad_backend": self.vad_backend,
             "fusion": self.fusion.as_dict(),
             "detector_means": {
                 k: (None if v is None else round(v, 4))
@@ -101,11 +108,8 @@ class AnalysisResult:
         }
 
 
-def _window_is_speech(seg: np.ndarray, sr: int) -> tuple[bool, float]:
-    mask, _ = speech_mask(seg, sr)
-    rms = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2) + 1e-12))
-    ratio = float(np.mean(mask)) if mask.size else 0.0
-    return ratio >= 0.25, rms
+def _rms(seg: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(seg.astype(np.float64) ** 2) + 1e-12))
 
 
 def _context_inputs(ctx: dict[str, Any]) -> dict[str, ComponentInput]:
@@ -146,7 +150,14 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
     lat["degrade"] = (time.perf_counter() - t0) * 1000
 
     duration = len(audio) / sr if sr else 0.0
-    sratio = speech_ratio(audio, sr)
+
+    # VAD runs ONCE over the whole clip; windows then ask ratio_in() (§Phase 1.5 C)
+    t_vad = time.perf_counter()
+    vad = vad_mod.analyze(audio, sr)
+    lat["vad"] = (time.perf_counter() - t_vad) * 1000
+    sratio = vad.overall_ratio
+    if vad.fallback_reason:
+        warnings.append(f"VAD fell back to the energy gate: {vad.fallback_reason}")
 
     # per-detector accumulation over speech windows
     acc: dict[str, list[float]] = {n: [] for n in _DETECTOR_COMPONENT}
@@ -158,8 +169,9 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
     ctx_inputs = _context_inputs(ctx)
 
     for win in iter_windows(audio, sr):
-        is_speech, rms = _window_is_speech(win.samples, sr)
-        ws = WindowScore(win.index, win.t_start, win.t_end, is_speech, None, None, rms)
+        is_speech = vad.ratio_in(win.t_start, win.t_end) >= s.window_speech_ratio
+        ws = WindowScore(win.index, win.t_start, win.t_end, is_speech, None, None,
+                         _rms(win.samples))
         if not is_speech:
             windows.append(ws)
             continue
@@ -222,6 +234,7 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
         warnings.append("no speech detected — score is not meaningful")
 
     final = fuse(agg_inputs, ctx.get("weights"), s)
+    findings, verdict = derive_findings(agg_inputs)
 
     for name, lst in det_latency.items():
         if lst:
@@ -241,6 +254,9 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
         windows=windows,
         detector_means=detector_means,
         latency_ms=lat,
+        findings=findings,
+        voice_verdict=verdict,
+        vad_backend=vad.backend,
         context={"components_wired": False, "phase": 1,
                  **{k: v for k, v in ctx.items() if k in ("scenario", "channel")}},
         warnings=warnings,

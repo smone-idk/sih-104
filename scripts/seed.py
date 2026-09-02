@@ -84,7 +84,7 @@ def seed_voice_profile(conn) -> None:
         label_file = s.demo_assets_dir / "genuine" / "ENROLLED_SPEAKER.txt"
         label = "Rajesh Sharma — CFO"
         if label_file.exists():
-            label = label_file.read_text().splitlines()[1].strip()
+            label = label_file.read_text(encoding="utf-8").splitlines()[1].strip()
         conn.execute(
             "INSERT INTO voice_profiles (id, display_name, role, embedding, "
             "embedding_dim, n_enroll_clips, source_note) VALUES (?,?,?,?,?,?,?)",

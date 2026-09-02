@@ -50,3 +50,44 @@ def white_noise() -> np.ndarray:
 @pytest.fixture
 def silence() -> np.ndarray:
     return np.zeros(SR * 4, dtype=np.float32)
+
+
+# --- real demo audio (skipped when the corpus has not been built) ----------
+def _genuine_dir():
+    from voiceshield.config import get_settings
+    return get_settings().demo_assets_dir / "genuine"
+
+
+def _find(prefix: str):
+    d = _genuine_dir()
+    if not d.exists():
+        return None
+    hits = sorted(d.glob(f"{prefix}*.wav"))
+    return hits[0] if hits else None
+
+
+@pytest.fixture
+def enrolled_clip_path():
+    """Longest enrolled clip, so window-timeline tests have several hops."""
+    d = _genuine_dir()
+    if not d.exists():
+        pytest.skip("demo corpus not built — scripts/build_demo_assets.py --tier genuine")
+    hits = sorted(d.glob("enrolled_1272*.wav"), key=lambda p: p.stat().st_size)
+    if not hits:
+        pytest.skip("demo corpus not built")
+    return hits[-1]
+
+
+@pytest.fixture
+def other_clip_path():
+    p = _find("genuine_1462")
+    if p is None:
+        pytest.skip("demo corpus not built")
+    return p
+
+
+@pytest.fixture
+def real_speech(enrolled_clip_path):
+    from voiceshield.ingest.audio import load_audio
+    audio, _sr = load_audio(enrolled_clip_path)
+    return audio

@@ -133,6 +133,51 @@ Two different clips → two different, fully explainable scores. ✔
 - Prosody baseline is estimated from only 6 clips / 2 speakers (`--quick` demo
   set). Wider baseline needs the full `build_demo_assets.py` run.
 
+## Phase 1.5 — Corpus, AASIST diagnosis, VAD
+
+**Status:** ⚠️ **6 of 7 gate items pass; item 2 fails on a measured finding, not a bug.**
+
+**Task A — corpus.** 42 clips, all three tiers, manifest-driven:
+32 genuine (LibriSpeech dev-clean, 8 speakers, spk 1272 = "Rajesh Sharma — CFO"),
+5 synthetic (Piper `en_US-lessac-medium`), 5 cloned (XTTS-v2 of spk 1272).
+`PROVENANCE.md` regenerates from `demo_assets/manifest.json` with source,
+licence, model, generation params and SHA256 per clip. Prosody baseline rebuilt
+on 32 clips / 8 speakers. TTS toolchain isolated in `tools/.venv-tts`.
+
+**Task B — AASIST diagnosis: measured domain gap.** Polarity verified against
+clovaai's eval convention (correct). Preprocessing verified (exact 64,600
+samples, tiled not zero-padded, no normalisation, 16 kHz — contiguous vs tiled
+differs by ≤0.03). Home turf clean: **ASVspoof2019 LA dev, n=80 balanced,
+EER 0.00 %, accuracy 100 %**, bonafide median 0.0000 / spoof median 1.0000.
+On our corpus it separates nothing. Left as-is and badged, per the diagnosis.
+Full numbers in `LIMITATIONS.md §3`.
+
+**Task C — Silero VAD** in place (MIT, weights bundled in the wheel, offline-safe);
+energy gate retained behind `VOICESHIELD_VAD_BACKEND=energy`. VAD now runs once
+per clip rather than once per window. Silero gives 7 clean utterance boundaries
+where the energy gate produced 10 fragments on the same clip.
+
+**Also — findings separated from score.** `fusion/findings.py` emits typed
+findings (`speaker_mismatch`, `synthetic_speech`, `cloned_voice`,
+`speaker_match`) plus a `voice_verdict` resolving the 2×2 of
+synthetic × speaker-similarity. Carried on every analysis result for the Phase 2 UI.
+
+**⚠️ Blocker for Phase 2.** Measured end-to-end today:
+
+| clip | score | band | verdict |
+|---|---|---|---|
+| cloned XTTS of the CFO, reading the fraud script | **38.4** | **LOW** | CONSISTENT |
+| Piper synthetic, unrelated voice | 52.4 | MEDIUM | SPEAKER_MISMATCH |
+| genuine, different real speaker | 52.6 | MEDIUM | SPEAKER_MISMATCH |
+
+The cloned attack scores **lowest of the three**, because the clone matches the
+enrolled profile (ECAPA cosine +0.531) and the anti-spoofing layer is blind to
+XTTS (0.379, indistinguishable from genuine 0.324–0.383). Phase 2's gate
+("cloned clip scores higher than genuine, no controls touched") is therefore
+**unreachable with the current detector set** and needs a decision first.
+
+---
+
 ## Phase 2 — WebSocket streaming + Live Analysis
 
 **Gate:** Genuine LibriSpeech clip scores LOW, cloned attack clip scores higher,

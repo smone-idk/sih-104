@@ -30,11 +30,75 @@ It is the reference for what VoiceShield v1 does and does not claim.
 
 ## 3. What is a pretrained model used as-is (badged `PRETRAINED`)
 
-- **AASIST** trained on **ASVspoof2019 LA**. Known generalization gap: ASVspoof
-  2019-era training data does **not** cover modern neural TTS/VC (XTTS-v2,
-  StyleTTS2, VALL-E-class). Expect degraded, sometimes inverted, scores on
-  current cloning tools. The Evaluation page measures this on our own clips
-  rather than hiding it.
+- **AASIST** trained on **ASVspoof2019 LA**. The generalization gap is not a
+  caveat we inherited from the literature — we measured it. See the boxed
+  finding below.
+
+> #### Measured finding — AASIST domain gap (Phase 1.5, 2026-09-02)
+>
+> **The wrapper is correct; the model does not transfer to our corpus.**
+>
+> Diagnosis followed polarity → preprocessing → home-turf, in that order:
+>
+> 1. **Polarity — correct.** `out_layer` emits 2 logits; clovaai's eval reads
+>    `batch_out[:, 1]` as *bonafide*. Our wrapper reports `softmax(out)[0]` as
+>    spoof-probability, which is the same convention.
+> 2. **Preprocessing — correct.** Input is exactly 64,600 samples, 16 kHz mono,
+>    tiled (not zero-padded) when short, with **no amplitude normalization** —
+>    matching `data_utils.py` upstream. Feeding contiguous 64,600 real samples
+>    instead of a tiled 64,000-sample window changes the score by **≤0.03**
+>    across every offset tested, so the tile splice is not responsible.
+> 3. **Home turf — clean.** On **ASVspoof2019 LA dev** (the model's own
+>    distribution; balanced subset, n=40 bonafide / 40 spoof, original FLAC):
+>
+>    | class | median spoof-prob | mean | extremum |
+>    |---|---|---|---|
+>    | bonafide | **0.0000** | 0.0001 | max 0.0033 |
+>    | spoof | **1.0000** | 0.9992 | min 0.9704 |
+>
+>    **EER 0.00 %, accuracy 100 % @ 0.5.** Perfect separation.
+>
+> On **our corpus** the same wrapper is near-random. Measured against the
+> enrolled profile (speaker 1272) on all four tiers:
+>
+> | tier | n | AASIST spoof-prob | ECAPA cosine vs enrolled |
+> |---|---|---|---|
+> | genuine — spk 1272 (the enrolled speaker) | 4 | 0.383 | **+0.854** |
+> | genuine — 7 other speakers | 28 | 0.324 | +0.016 |
+> | synthetic — Piper TTS, unrelated voice | 5 | **0.529** | +0.156 |
+> | cloned — XTTS-v2 of spk 1272 | 5 | **0.379** | **+0.531** |
+>
+> Three things fall out of that table:
+>
+> - **AASIST does not separate anything here.** Genuine 0.32–0.38 vs Piper 0.53
+>   vs cloned 0.38 — the distributions overlap completely (genuine max 0.91 >
+>   Piper min 0.27). Genuine speaker 1673 scores *higher* than most Piper clips.
+>   Per-window scores on continuous genuine speech swing between 0.0001 and 0.87
+>   on windows that overlap by 75 %.
+> - **AASIST is blind to XTTS-v2 clones specifically** (0.379, statistically
+>   indistinguishable from genuine 0.324–0.383). XTTS-v2 is a 2023 model; the
+>   19 ASVspoof2019 attacks are 2019-era vocoders.
+> - **ECAPA, by contrast, works exactly as intended** — and the clone fools it
+>   on purpose: cosine **+0.531** against the enrolled speaker, versus +0.016
+>   for other real humans. That is the attack succeeding at the thing it is
+>   designed to do.
+>
+> **Conclusion: a measured domain gap, not a bug.** ASVspoof2019 LA bonafide is
+> VCTK-derived studio speech; neither LibriSpeech's channel nor Piper's/XTTS's
+> modern neural vocoders are represented. The detector is left **as-is and
+> honestly badged** rather than reweighted — downweighting it would hide the
+> finding. Not fixable by tuning; it needs a model trained on modern TTS.
+>
+> The DSP `HEURISTIC` fallback does not rescue this: on the same sets it scores
+> genuine 0.025 vs Piper 0.002 — it separates in the *wrong direction*.
+>
+> **Consequence for the product story:** on this corpus the voice-clone claim
+> cannot rest on the anti-spoofing layer. What does work today is speaker
+> verification (ECAPA) plus, from Phase 3, the transcript-derived context
+> engine. Closing the synthetic-detection gap requires swapping in an
+> SSL-based anti-spoofing model trained on ASVspoof2021-DF / In-the-Wild — a
+> one-line `DetectorRegistry` change by design, and the top item on the
+> production roadmap.
 - **ECAPA-TDNN** trained on VoxCeleb (English, mostly celebrity interview
   audio). Accent and channel mismatch with Indian telephony speech will move
   the operating point; not compensated for in v1.
@@ -137,3 +201,31 @@ _(updated at the end of each build phase)_
   - Telephony µ-law degradation inflates AASIST spoof-probability markedly
     (0.65 → 0.96 on one genuine clip) — the narrowband generalization gap. This
     is surfaced in the §8 before/after view, not corrected for.
+- **Phase 1.5:**
+  - **The anti-spoofing layer does not work on this corpus.** Diagnosed to a
+    measured domain gap, not a bug (§3). Left as-is and badged, per the
+    diagnosis. The practical consequence is that a cloned clip does **not**
+    currently score higher than a genuine one on the synthetic axis — it scores
+    *lower* than a different-speaker genuine clip, because the clone matches the
+    enrolled profile. This blocks the Phase 2 gate as originally written and
+    needs a decision before Phase 2 starts.
+  - **TTS toolchain is a second, isolated venv** (`tools/.venv-tts`).
+    `coqui-tts` requires `transformers>=4.57,<5` (5.x removed
+    `isin_mps_friendly`, which XTTS's GPT layer imports) and pulls numpy 2.x /
+    librosa 0.11, which would have silently changed prosody features and
+    invalidated the baseline in the analysis venv. Corpus generation is a build
+    step, so the split costs nothing at runtime — but it is ~5 GB of extra disk.
+  - **XTTS-v2 is non-commercial** (Coqui Public Model License). Generation runs
+    with `COQUI_TOS_AGREED=1`. Fine for a prototype; a shipped product cannot
+    use its outputs.
+  - Hindi/Punjabi tiers are still **not built** — Common Voice needs a manual
+    click-through download, and no cloned/synthetic clips exist in those
+    languages. The corpus is English-only so far.
+  - Prosody baseline is now 32 clips / 8 speakers, all LibriSpeech read speech —
+    still not conversational telephony, so the "human baseline" is narrow.
+  - Silero VAD replaces the energy gate. Consequence: synthetic test tones are
+    now correctly rejected as non-speech, so pipeline tests run on real audio
+    and skip when the corpus is absent. The energy gate stays available via
+    `VOICESHIELD_VAD_BACKEND=energy`.
+  - All text file IO now pins `encoding="utf-8"` — the TTS venv runs under an
+    ASCII locale and crashed on the em-dash in the scam scripts.

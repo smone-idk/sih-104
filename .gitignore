@@ -28,3 +28,5 @@ frontend/dist/
 
 # TS build info
 frontend/tsconfig.tsbuildinfo
+tools/.venv-tts/
+demo_assets/manifest.json
