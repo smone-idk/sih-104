@@ -50,6 +50,9 @@ class WindowScore:
     rms_energy: float
     detectors: dict[str, Any] = field(default_factory=dict)
     latency_ms: dict[str, float] = field(default_factory=dict)
+    #: 24 log-spaced band energies in dBFS — real FFT of this window, used for
+    #: the streaming spectrogram. Measured, not decorative.
+    spectrum: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -108,6 +111,7 @@ class AnalysisResult:
                     "raw_score": None if w.raw_score is None else round(w.raw_score, 2),
                     "ema_score": None if w.ema_score is None else round(w.ema_score, 2),
                     "rms_energy": round(w.rms_energy, 5),
+                    "spectrum": w.spectrum,
                     "detectors": w.detectors,
                     "latency_ms": {k: round(v, 2) for k, v in w.latency_ms.items()},
                 }
@@ -118,6 +122,27 @@ class AnalysisResult:
 
 def _rms(seg: np.ndarray) -> float:
     return float(np.sqrt(np.mean(seg.astype(np.float64) ** 2) + 1e-12))
+
+
+_SPEC_BANDS = 24
+
+
+def _spectrum(seg: np.ndarray, sr: int, n_bands: int = _SPEC_BANDS) -> list[float]:
+    """Log-spaced band energies in dBFS for the streaming spectrogram."""
+    if seg.size == 0:
+        return [-90.0] * n_bands
+    w = np.hanning(len(seg))
+    # normalise by the window's coherent gain so magnitudes are in signal units
+    # and the dB values are true dBFS (negative), not raw FFT bin magnitudes.
+    mag = np.abs(np.fft.rfft(seg.astype(np.float64) * w)) / (np.sum(w) / 2.0)
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+    edges = np.logspace(np.log10(80.0), np.log10(min(sr / 2, 8000.0)), n_bands + 1)
+    out: list[float] = []
+    for i in range(n_bands):
+        m = (freqs >= edges[i]) & (freqs < edges[i + 1])
+        e = float(np.mean(mag[m] ** 2)) if m.any() else 0.0
+        out.append(round(float(10.0 * np.log10(e + 1e-12)), 2))
+    return out
 
 
 def _context_inputs(ctx: dict[str, Any]) -> dict[str, ComponentInput]:
@@ -141,13 +166,118 @@ def _context_inputs(ctx: dict[str, Any]) -> dict[str, ComponentInput]:
     return out
 
 
+class WindowScorer:
+    """Scores one 4 s window and accumulates session state.
+
+    THE shared analysis core (§14). Batch (`analyze_audio`) and the WebSocket
+    stream (`voiceshield.stream.session`) both drive this — there is no second
+    scoring path for the demo. The caller decides whether a window is speech
+    (batch runs VAD once over the whole clip; streaming runs it per window,
+    since the clip does not exist yet), and the scorer stays agnostic.
+    """
+
+    def __init__(self, ctx: dict[str, Any] | None = None,
+                 settings=None) -> None:
+        self.s = settings or get_settings()
+        self.ctx = dict(ctx or {})
+        self.reg = get_registry()
+        self.scoring = _scoring_map()
+        self.ctx_inputs = _context_inputs(self.ctx)
+        self.ema = EMA(self.s.ema_alpha)
+        self.acc: dict[str, list[float]] = {n: [] for n in self.scoring}
+        self.det_latency: dict[str, list[float]] = {n: [] for n in self.scoring}
+        self.baseline_means: dict[str, list[float]] = {}
+        self.windows: list[WindowScore] = []
+        self.n_speech = 0
+
+    def score(self, index: int, t_start: float, t_end: float,
+              samples: np.ndarray, sr: int, is_speech: bool) -> WindowScore:
+        ws = WindowScore(index, t_start, t_end, is_speech, None, None, _rms(samples))
+        ws.spectrum = _spectrum(samples, sr)
+        if not is_speech:
+            self.windows.append(ws)
+            return ws
+        self.n_speech += 1
+
+        comp_inputs: dict[str, ComponentInput] = {}
+        for det in self.reg.available():
+            res = det.analyze(samples, sr, self.ctx)
+            ws.detectors[det.name] = res.as_dict()
+            ws.latency_ms[det.name] = res.latency_ms
+            comp = self.scoring.get(det.name)
+            if comp is None:
+                # zero-weight baseline detector: record it, never fuse it
+                if res.available and res.score is not None:
+                    self.baseline_means.setdefault(det.name, []).append(res.score)
+                continue
+            self.det_latency[det.name].append(res.latency_ms)
+            if res.available and res.score is not None:
+                self.acc[det.name].append(res.score)
+                comp_inputs[comp] = ComponentInput(
+                    value=res.score, available=True, note=res.note,
+                    kind=res.kind, detail=res.detail)
+            else:
+                comp_inputs[comp] = ComponentInput(
+                    value=None, available=False, note=res.note, kind=res.kind)
+
+        comp_inputs.update(self.ctx_inputs)
+        wfused = fuse(comp_inputs, self.ctx.get("weights"), self.s)
+        ws.raw_score = wfused.score
+        ws.ema_score = self.ema.update(wfused.score)
+        self.windows.append(ws)
+        return ws
+
+    def aggregate(self):
+        """Mean each weighted detector over its speech windows, fuse once.
+
+        Returns (fusion, findings, verdict, detector_means, agg_inputs).
+        """
+        detector_means: dict[str, float | None] = {}
+        agg_inputs: dict[str, ComponentInput] = {}
+        for name, comp in self.scoring.items():
+            vals = self.acc[name]
+            det = self.reg.get(name)
+            if vals:
+                mean_v = float(np.mean(vals))
+                detector_means[name] = mean_v
+                last_detail = {}
+                for w in reversed(self.windows):
+                    if name in w.detectors and w.detectors[name].get("available"):
+                        last_detail = w.detectors[name].get("detail", {})
+                        break
+                agg_inputs[comp] = ComponentInput(
+                    value=mean_v, available=True, kind=det.kind if det else "",
+                    note=f"mean over {len(vals)} speech window(s)", detail=last_detail)
+            else:
+                detector_means[name] = None
+                note = "no speech windows to score"
+                if det and not det.available:
+                    note = det.load_error or "detector unavailable"
+                elif name == "speaker_consistency" and self.ctx.get("enrolled_embedding") is None:
+                    note = "layer unavailable — no enrolled profile"
+                agg_inputs[comp] = ComponentInput(
+                    value=None, available=False,
+                    kind=det.kind if det else "", note=note)
+
+        agg_inputs.update(self.ctx_inputs)
+        final = fuse(agg_inputs, self.ctx.get("weights"), self.s)
+        findings, verdict = derive_findings(agg_inputs)
+        return final, findings, verdict, detector_means, agg_inputs
+
+    def detector_latencies(self) -> dict[str, float]:
+        return {f"detector.{n}": float(np.mean(v))
+                for n, v in self.det_latency.items() if v}
+
+    def baseline_detector_means(self) -> dict[str, float]:
+        return {k: float(np.mean(v)) for k, v in self.baseline_means.items() if v}
+
+
 def analyze_audio(audio: np.ndarray, sr: int, *,
                   source: str = "upload",
                   ctx: dict[str, Any] | None = None,
                   telephony: TelephonyConfig | None = None) -> AnalysisResult:
     s = get_settings()
     ctx = dict(ctx or {})
-    reg = get_registry()
     warnings: list[str] = []
     lat: dict[str, float] = {}
 
@@ -167,92 +297,19 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
     if vad.fallback_reason:
         warnings.append(f"VAD fell back to the energy gate: {vad.fallback_reason}")
 
-    # per-detector accumulation over speech windows
-    scoring = _scoring_map()
-    acc: dict[str, list[float]] = {n: [] for n in scoring}
-    det_latency: dict[str, list[float]] = {n: [] for n in scoring}
-    # detectors that run and are reported but carry zero fusion weight
-    baseline_means: dict[str, list[float]] = {}
-    ema = EMA(s.ema_alpha)
-    windows: list[WindowScore] = []
-    n_speech = 0
-
-    ctx_inputs = _context_inputs(ctx)
-
+    scorer = WindowScorer(ctx, s)
     for win in iter_windows(audio, sr):
         is_speech = vad.ratio_in(win.t_start, win.t_end) >= s.window_speech_ratio
-        ws = WindowScore(win.index, win.t_start, win.t_end, is_speech, None, None,
-                         _rms(win.samples))
-        if not is_speech:
-            windows.append(ws)
-            continue
-        n_speech += 1
+        scorer.score(win.index, win.t_start, win.t_end, win.samples, sr, is_speech)
 
-        comp_inputs: dict[str, ComponentInput] = {}
-        for det in reg.available():
-            res = det.analyze(win.samples, sr, ctx)
-            ws.detectors[det.name] = res.as_dict()
-            ws.latency_ms[det.name] = res.latency_ms
-            comp = scoring.get(det.name)
-            if comp is None:
-                # zero-weight baseline detector: record it, never fuse it
-                if res.available and res.score is not None:
-                    baseline_means.setdefault(det.name, []).append(res.score)
-                continue
-            det_latency[det.name].append(res.latency_ms)
-            if res.available and res.score is not None:
-                acc[det.name].append(res.score)
-                comp_inputs[comp] = ComponentInput(
-                    value=res.score, available=True, note=res.note,
-                    kind=res.kind, detail=res.detail)
-            else:
-                comp_inputs[comp] = ComponentInput(
-                    value=None, available=False, note=res.note, kind=res.kind)
-
-        comp_inputs.update({k: v for k, v in ctx_inputs.items()})
-        wfused = fuse(comp_inputs, ctx.get("weights"), s)
-        ws.raw_score = wfused.score
-        ws.ema_score = ema.update(wfused.score)
-        windows.append(ws)
-
-    # aggregate: mean of each detector over speech windows -> single fusion
-    detector_means: dict[str, float | None] = {}
-    agg_inputs: dict[str, ComponentInput] = {}
-    for name, comp in scoring.items():
-        vals = acc[name]
-        det = reg.get(name)
-        if vals:
-            mean_v = float(np.mean(vals))
-            detector_means[name] = mean_v
-            # carry a representative detail from the last window for the panel
-            last_detail = {}
-            for w in reversed(windows):
-                if name in w.detectors and w.detectors[name].get("available"):
-                    last_detail = w.detectors[name].get("detail", {})
-                    break
-            agg_inputs[comp] = ComponentInput(
-                value=mean_v, available=True, kind=det.kind if det else "",
-                note=f"mean over {len(vals)} speech window(s)", detail=last_detail)
-        else:
-            detector_means[name] = None
-            note = "no speech windows to score"
-            if det and not det.available:
-                note = det.load_error or "detector unavailable"
-            elif name == "speaker_consistency" and ctx.get("enrolled_embedding") is None:
-                note = "layer unavailable — no enrolled profile"
-            agg_inputs[comp] = ComponentInput(
-                value=None, available=False, kind=det.kind if det else "", note=note)
-
-    agg_inputs.update(ctx_inputs)
+    windows = scorer.windows
+    n_speech = scorer.n_speech
     if n_speech == 0:
         warnings.append("no speech detected — score is not meaningful")
 
-    final = fuse(agg_inputs, ctx.get("weights"), s)
-    findings, verdict = derive_findings(agg_inputs)
-
-    for name, lst in det_latency.items():
-        if lst:
-            lat[f"detector.{name}"] = float(np.mean(lst))
+    final, findings, verdict, detector_means, _ = scorer.aggregate()
+    baseline_means = scorer.baseline_means
+    lat.update(scorer.detector_latencies())
     lat["total"] = (time.perf_counter() - t0) * 1000
 
     return AnalysisResult(

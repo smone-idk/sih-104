@@ -90,6 +90,19 @@ make api
 make frontend
 ```
 
+### Live Analysis (Phase 2)
+
+```bash
+# terminal 1 — API (loads models once, keeps them warm)
+cd backend && .venv/bin/python -m uvicorn voiceshield.api.app:app --port 8000
+# terminal 2 — UI
+cd frontend && npm run dev        # http://localhost:5173/live
+```
+
+Pick a scenario, press **Start simulation**. The clip is streamed through
+`WS /api/v1/stream` in 1 s hops and scored by the same `WindowScorer` the CLI
+uses. `GET /api/v1/scenarios` lists what is bundled.
+
 Health: `curl localhost:8000/api/v1/health`
 Inventory: `curl localhost:8000/api/v1/inventory`
 
@@ -145,7 +158,7 @@ Built in strict order; a phase does not start until the previous gate passes
 |---|---|---|
 | 0 ✅ | Scaffold, fetch_models, build_demo_assets, SQLite schema, startup inventory | Boots offline; prints accurate detector list with device |
 | 1 ✅ | Batch pipeline as a CLI (`python analyze.py clip.wav` → JSON) | Two clips → two different explainable scores; detector tests pass |
-| 2 | WebSocket streaming + Live Analysis screen | Genuine clip LOW, cloned clip higher, no controls touched |
+| 2 ✅ | WebSocket streaming + Live Analysis screen | Genuine clip LOW, cloned clip higher, no controls touched |
 | 3 | Whisper worker + context engine + explainability | Every context flag traces to a transcript quote |
 | 4 | Policy engine, mock approval blocked at API, challenge-response, incident log | `curl POST /approve` → 403 while risk HIGH |
 | 5 | Voice profiles, upload UI, push-to-record, telephony toggle | Removing a profile disables speaker layer, redistributes weight |

@@ -231,7 +231,58 @@ latency **22.3 ms** per 4 s window (fp16, CUDA).
 
 ---
 
-## Phase 2 — WebSocket streaming + Live Analysis
+## Phase 2 — WebSocket streaming + Live Analysis ✅
+
+**Gate:** genuine LibriSpeech clip scores LOW, cloned attack clip scores higher,
+with no controls touched — **PASSED**.
+
+Measured over the WebSocket, identical settings, enrolled profile active:
+
+| scenario | score | band | verdict |
+|---|---|---|---|
+| Genuine call — control | **5.4** | **LOW** | CONSISTENT |
+| Genuine, different human | 36.9 | LOW | SPEAKER_MISMATCH |
+| **CEO transfer (XTTS clone)** | **61.0** | MEDIUM | **CLONED_VOICE** |
+| Bank OTP (XTTS clone) | 58.8 | MEDIUM | CLONED_VOICE |
+| Govt summons (Piper TTS) | 78.9 | HIGH | SYNTHETIC_OTHER |
+
+**Backend**
+- `pipeline.WindowScorer` extracted as THE shared analysis core. Batch and
+  streaming both drive it — `test_streaming_agrees_with_batch` asserts the two
+  paths produce the same verdict and band on the same clip.
+- `stream/session.py` — rolling buffer, 4 s windows on a 1 s hop, per-window
+  VAD (batch runs VAD once over the whole clip; streaming cannot, since the
+  clip does not exist yet — stated in the module docstring, asserted in tests).
+  `close()` drops the buffer (§12). `set_context_components()` is the Phase 3 hook.
+- `stream/scenarios.py` — 6 bundled scenarios, each backed by a real file,
+  including **two genuine controls**. Each declares `expected` behaviour as
+  prose, not an expected number.
+- `WS /api/v1/stream`, `GET /api/v1/scenarios`. Server-side pacing to wall clock
+  so the chart moves like a real call (`realtime: false` for fast tests).
+- Window payloads carry a real 24-band FFT spectrum (dBFS, coherent-gain
+  normalised) so the spectrogram is a measurement, not decoration.
+
+**Frontend** (`/live`) — session header, risk gauge with server-supplied band
+thresholds, streaming chart showing **raw dots and the EMA line together**,
+RMS envelope + spectrogram, four detector cards with kind badges and their
+fusion weight (AASIST visibly at 0.00 with its reason), latency strip against
+the device budget, findings with evidence, and the explainability table.
+Verified in a real browser (Playwright): no JS errors, gauge/verdict/chart all
+render from streamed data.
+
+**Measured latency** (per 4 s window, CUDA, from the live strip):
+AntiDeepfake 27 ms · AASIST 17 ms · ECAPA 11 ms · prosody 21 ms —
+**total 75 ms against the 200 ms budget**.
+
+57 tests pass; `make grep-honesty` clean.
+
+**Not yet done here:** context/ASR components still report unavailable and their
+weight is redistributed (Phase 3); push-to-record and upload use the same
+session object but have no UI yet (Phase 5).
+
+---
+
+## Phase 2 — original notes
 
 **Gate:** Genuine LibriSpeech clip scores LOW, cloned attack clip scores higher,
 no controls touched. — _not started_

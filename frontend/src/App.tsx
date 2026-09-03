@@ -1,33 +1,13 @@
 import { useEffect, useState } from "react";
-import {
-  getHealth,
-  getInventory,
-  type Health,
-  type InventoryReport,
-  type DetectorKind,
-} from "./api";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { getHealth, getInventory, type Health, type InventoryReport } from "./api";
+import { KindBadge } from "./components/common";
+import LiveAnalysis from "./pages/LiveAnalysis";
 
-const KIND_STYLE: Record<DetectorKind, string> = {
-  trained: "bg-emerald-100 text-emerald-800 border-emerald-300",
-  pretrained: "bg-sky-100 text-sky-800 border-sky-300",
-  heuristic: "bg-amber-100 text-amber-900 border-amber-300",
-  simulated: "bg-zinc-200 text-zinc-700 border-zinc-400",
-};
-
-function KindBadge({ kind }: { kind: DetectorKind }) {
-  return (
-    <span
-      className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${KIND_STYLE[kind]}`}
-    >
-      {kind}
-    </span>
-  );
-}
-
-export default function App() {
+function SystemPage() {
   const [health, setHealth] = useState<Health | null>(null);
   const [inv, setInv] = useState<InventoryReport | null>(null);
-  const [err, setErr] = useState<string>("");
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     Promise.all([getHealth(), getInventory()])
@@ -38,101 +18,97 @@ export default function App() {
       .catch((e) => setErr(String(e)));
   }, []);
 
+  if (err) return <p className="rounded bg-red-50 p-3 text-sm text-red-700">{err}</p>;
+  if (!health || !inv) return <p className="text-sm text-zinc-500">Loading…</p>;
+
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900">
-      <header className="border-b bg-white px-6 py-4">
-        <h1 className="text-xl font-bold">VoiceShield</h1>
-        <p className="text-sm text-zinc-500">
-          Voice Integrity &amp; Impersonation Risk Engine (Prototype)
-        </p>
-      </header>
+    <div className="space-y-4">
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold text-zinc-800">Runtime</h2>
+        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div><dt className="text-[10px] uppercase text-zinc-500">device</dt><dd>{health.device}</dd></div>
+          <div><dt className="text-[10px] uppercase text-zinc-500">offline</dt><dd>{String(health.offline)}</dd></div>
+          <div><dt className="text-[10px] uppercase text-zinc-500">detectors</dt><dd>{health.detectors_loaded}/{health.detectors_total}</dd></div>
+          <div><dt className="text-[10px] uppercase text-zinc-500">torch</dt><dd>{inv.torch.torch}</dd></div>
+        </dl>
+      </section>
+      <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold text-zinc-800">Detector inventory</h2>
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase tracking-wide text-zinc-500">
+            <tr>
+              <th className="py-1 text-left font-medium">detector</th>
+              <th className="text-left font-medium">kind</th>
+              <th className="text-left font-medium">feeds</th>
+              <th className="text-right font-medium">weight</th>
+              <th className="text-left font-medium">device</th>
+              <th className="text-left font-medium">status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {inv.detectors.map((d) => (
+              <tr key={d.name} className="border-t border-zinc-100">
+                <td className="py-1.5 font-medium text-zinc-800">{d.name.replace(/_/g, " ")}</td>
+                <td><KindBadge kind={d.kind} /></td>
+                <td className="text-zinc-600">{d.feeds ?? "—"}</td>
+                <td className="text-right tabular-nums">{d.fusion_weight.toFixed(2)}</td>
+                <td className="text-zinc-600">{d.device}</td>
+                <td className={d.available ? "text-emerald-700" : "text-red-700"}>
+                  {d.available ? "loaded" : d.load_error || "unavailable"}
+                  {d.note && <div className="text-[10px] leading-snug text-amber-800">{d.note}</div>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
 
-      <main className="mx-auto max-w-3xl space-y-6 p-6">
-        <div className="rounded-lg border bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          Authorized channels only: file upload, bundled demo clips, the
-          authorized enterprise-stream API, or an explicit push-to-record button.
-          VoiceShield never records, taps, or monitors calls or a background
-          microphone.
-        </div>
+const NAV = [
+  { to: "/live", label: "Live Analysis" },
+  { to: "/system", label: "System" },
+];
 
-        {err && (
-          <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-            Backend not reachable: {err}
+export default function App() {
+  return (
+    <div className="min-h-screen bg-zinc-50">
+      <header className="border-b border-zinc-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+          <div>
+            <h1 className="text-base font-bold tracking-tight text-zinc-900">VoiceShield</h1>
+            <p className="text-[11px] text-zinc-500">
+              Voice Integrity &amp; Impersonation Risk Engine (Prototype)
+            </p>
           </div>
-        )}
-
-        {health && inv && (
-          <>
-            <section className="rounded-lg border bg-white p-4">
-              <h2 className="mb-2 font-semibold">Runtime</h2>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                <dt className="text-zinc-500">Version</dt>
-                <dd>{health.version}</dd>
-                <dt className="text-zinc-500">Device</dt>
-                <dd className="font-mono">{inv.device}</dd>
-                <dt className="text-zinc-500">Torch / CUDA</dt>
-                <dd className="font-mono">
-                  {inv.torch.torch} · cuda={inv.torch.cuda_available}
-                  {inv.torch.cuda_device !== "-" && ` (${inv.torch.cuda_device})`}
-                </dd>
-                <dt className="text-zinc-500">Offline</dt>
-                <dd>{String(inv.offline)}</dd>
-                <dt className="text-zinc-500">Detectors loaded</dt>
-                <dd>
-                  {health.detectors_loaded}/{health.detectors_total}
-                </dd>
-                <dt className="text-zinc-500">Tier-A OK</dt>
-                <dd className={inv.tier_a_ok ? "text-emerald-700" : "text-red-700"}>
-                  {String(inv.tier_a_ok)}
-                </dd>
-              </dl>
-            </section>
-
-            <section className="rounded-lg border bg-white p-4">
-              <h2 className="mb-3 font-semibold">Detector inventory</h2>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-zinc-500">
-                    <th className="py-1">Detector</th>
-                    <th className="py-1">Kind</th>
-                    <th className="py-1">Feeds</th>
-                    <th className="py-1">Status</th>
-                    <th className="py-1">Device</th>
-                    <th className="py-1">Warmup</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inv.detectors.map((d) => (
-                    <tr key={d.name} className="border-b last:border-0">
-                      <td className="py-1.5 font-mono">{d.name}</td>
-                      <td className="py-1.5">
-                        <KindBadge kind={d.kind} />
-                      </td>
-                      <td className="py-1.5 text-zinc-500">{d.feeds}</td>
-                      <td className="py-1.5">
-                        {d.available ? (
-                          <span className="text-emerald-700">loaded</span>
-                        ) : (
-                          <span className="text-red-700" title={d.load_error}>
-                            unavailable
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-1.5 font-mono">{d.device}</td>
-                      <td className="py-1.5 font-mono text-zinc-500">
-                        {d.warmup_ms != null ? `${Math.round(d.warmup_ms)} ms` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-3 text-xs text-zinc-500">
-                Phase 0 scaffold. Live Analysis, context, explainability,
-                prevention and evaluation screens land in later phases.
-              </p>
-            </section>
-          </>
-        )}
+          <nav className="flex gap-1">
+            {NAV.map((n) => (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                className={({ isActive }) =>
+                  `rounded px-3 py-1.5 text-sm font-medium ${
+                    isActive ? "bg-sky-100 text-sky-800" : "text-zinc-600 hover:bg-zinc-100"
+                  }`
+                }
+              >
+                {n.label}
+              </NavLink>
+            ))}
+          </nav>
+          <p className="ml-auto max-w-md text-right text-[10px] leading-snug text-zinc-500">
+            Analyses only audio supplied through an authorized channel. Never taps
+            phone or messaging calls.
+          </p>
+        </div>
+      </header>
+      <main className="mx-auto max-w-7xl px-4 py-5">
+        <Routes>
+          <Route path="/" element={<Navigate to="/live" replace />} />
+          <Route path="/live" element={<LiveAnalysis />} />
+          <Route path="/system" element={<SystemPage />} />
+        </Routes>
       </main>
     </div>
   );

@@ -24,6 +24,7 @@ __pycache__/
 demo_assets/_asvspoof_dev/
 demo_assets/manifest.json
 frontend/dist/
+frontend/shot.mjs
 frontend/tsconfig.tsbuildinfo
 models/antideepfake-wav2vec-large/
 node_modules/
