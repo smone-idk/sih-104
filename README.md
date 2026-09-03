@@ -25,10 +25,12 @@ in the UI with a `HEURISTIC` badge.
 |---|---|
 | Speaker consistency (ECAPA-TDNN, cosine vs enrolled profile) | **real** — pretrained model |
 | Prosody anomaly (F0/jitter/shimmer/rate/pauses/flatness vs human baseline) | **real DSP**, badged `HEURISTIC` |
-| Transcript (faster-whisper `small`) | **real** — pretrained ASR |
-| Context signals (urgency/secrecy/authority/amount/out-of-workflow/PII) | **real** — rules+regex+span extraction from the transcript |
+| Transcript (faster-whisper `small`) | **weights cached, not wired yet** (Phase 3) |
+| Context signals (urgency/secrecy/authority/amount/out-of-workflow/PII) | **not wired yet** (Phase 3) — reports unavailable, weight is redistributed |
 | Latency | **real** — measured per stage, displayed |
-| Synthetic-speech detection (AASIST, ASVspoof2019-LA) | **real if weights fetched**, else a documented DSP `HEURISTIC` fallback |
+| Synthetic-speech detection (**AntiDeepfake** wav2vec2-large, 74k h multi-corpus) | **real** — pretrained, carries the `voice_authenticity` weight |
+| Synthetic-speech baseline (AASIST, ASVspoof2019-LA) | **real but zero fusion weight** — kept, badged, and measured; it fails on modern TTS (`LIMITATIONS.md` §3) |
+| Voice activity detection (Silero VAD) | **real** — pretrained; energy gate available via `VOICESHIELD_VAD_BACKEND=energy` |
 | Enterprise stream | **simulated transport** — bundled WAV fed through the real pipeline over WebSocket |
 | Caller metadata / directory | **demo data** — SQLite fixture, labelled in the UI |
 
@@ -62,10 +64,18 @@ make baseline                # prosody human-baseline from the genuine clips (op
 cd frontend && npm install
 ```
 
-Optional richer demo corpus (needs `piper-tts` / `coqui-tts`, GPU recommended):
+Full demo corpus — genuine + Piper synthetic + XTTS-cloned. The TTS toolchain
+lives in a **separate venv** because `coqui-tts` pulls numpy 2.x / transformers 5
+which would silently change the analysis stack:
 
 ```bash
-backend/.venv/bin/python scripts/build_demo_assets.py --all
+python3.11 -m venv tools/.venv-tts
+tools/.venv-tts/bin/pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+tools/.venv-tts/bin/pip install coqui-tts "transformers>=4.57,<5" piper-tts soundfile
+
+backend/.venv/bin/python   scripts/build_demo_assets.py --tier genuine
+tools/.venv-tts/bin/python scripts/build_demo_assets.py --tier synthetic --variants 3
+COQUI_TOS_AGREED=1 tools/.venv-tts/bin/python scripts/build_demo_assets.py --tier cloned --variants 3
 ```
 
 ### Offline check
@@ -131,7 +141,8 @@ backend/
     api/app.py          FastAPI; loads models once at startup, keeps them warm
     ingest/             chunking, resampling, VAD, telephony degradation (§8)
     ml/registry.py      DetectorRegistry — kind badges + weight redistribution
-    ml/detectors/       synthetic (AASIST | DSP heuristic) · speaker · prosody
+    ml/detectors/       synthetic (AntiDeepfake SSL | AASIST @0 wt | DSP) · speaker · prosody
+    stream/             StreamSession + bundled scenarios (§13)
     asr/                faster-whisper worker (decoupled from the acoustic loop)
     context/            transcript -> behavioural + transactional signals (§5)
     fusion/             weighted score + EMA + calibration notes (§6)
