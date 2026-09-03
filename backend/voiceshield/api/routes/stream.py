@@ -27,7 +27,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ...config import get_settings
 from ...ingest.audio import load_audio
 from ...ingest.telephony import TelephonyConfig
-from ...store.repo import get_profile
+from ...asr.worker import AsrWorker
+from ...store.repo import get_contact, get_profile, unknown_caller
 from ...stream import scenarios as scen
 from ...stream.session import StreamSession
 
@@ -86,6 +87,15 @@ async def stream(ws: WebSocket) -> None:
             snr_db=float(req.get("snr_db") or 20.0),
         )
         ctx = _resolve_ctx(req.get("use_profile", True), req.get("profile_id"))
+        # Enterprise directory record — DEMO DATA (§2 Tier C), labelled in the UI.
+        # Resolved from the scenario's caller number, NOT hardcoded: attaching
+        # "Unknown Caller" to every session would penalise the genuine control
+        # for something never measured from its audio.
+        if req.get("directory", True) and sc is not None:
+            try:
+                ctx["directory"] = get_contact(sc.directory_contact) or unknown_caller()
+            except Exception:
+                pass
         speed = float(req.get("speed", 1.0))       # 1.0 = real time
         realtime = bool(req.get("realtime", True))
 
@@ -106,6 +116,25 @@ async def stream(ws: WebSocket) -> None:
             return
 
         audio, sr = load_audio(sc.path())
+        asr = AsrWorker.get() if (s.asr_enabled and req.get("asr", True)) else None
+        loop = asyncio.get_running_loop()
+
+        async def drain_asr(force: bool = False) -> None:
+            """Transcribe any closed utterances and push a context frame.
+
+            Whisper runs in a thread executor so the 1 Hz acoustic loop is never
+            blocked by it — the two cadences stay independent (§4).
+            """
+            if asr is None or not asr.available or session is None:
+                return
+            for t_start, seg in session.pending_utterances(force=force):
+                segs = await loop.run_in_executor(
+                    None, lambda a=seg, t=t_start: asr.transcribe(
+                        a, sr, t_offset=t, index=len(session.transcript.segments)))
+                if segs:
+                    session.apply_transcript(segs)
+                    await ws.send_json(session.context_payload())
+
         # feed in hop-sized chunks so windows complete on the 1 s cadence (§4)
         chunk = int(round(s.hop_seconds * sr))
         t_wall = time.perf_counter()
@@ -113,6 +142,7 @@ async def stream(ws: WebSocket) -> None:
             piece = audio[i:i + chunk]
             for wsr in session.feed(piece):
                 await ws.send_json(StreamSession.window_payload(wsr))
+            await drain_asr()
             if realtime:
                 # pace to wall clock so the chart moves like a real call
                 target = (i + len(piece)) / sr / max(speed, 0.01)
@@ -121,6 +151,7 @@ async def stream(ws: WebSocket) -> None:
                     await asyncio.sleep(lag)
         for wsr in session.flush():
             await ws.send_json(StreamSession.window_payload(wsr))
+        await drain_asr(force=True)
 
         await ws.send_json(session.final_payload())
     except WebSocketDisconnect:

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getScenarios,
   openStream,
+  type ContextMsg,
   type FinalMsg,
   type Scenario,
   type SessionMsg,
@@ -11,6 +12,7 @@ import {
 import { Card, Stat } from "../components/common";
 import { RiskGauge } from "../components/RiskGauge";
 import { StreamChart, WaveformSpectrogram } from "../components/StreamChart";
+import { ContextPanel, TranscriptPanel } from "../components/ContextPanel";
 import {
   DetectorCard,
   ExplainPanel,
@@ -36,6 +38,7 @@ export default function LiveAnalysis() {
   const [session, setSession] = useState<SessionMsg | null>(null);
   const [windows, setWindows] = useState<WindowMsg[]>([]);
   const [final, setFinal] = useState<FinalMsg | null>(null);
+  const [ctx, setCtx] = useState<ContextMsg | null>(null);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState("");
   const closer = useRef<null | (() => void)>(null);
@@ -54,6 +57,7 @@ export default function LiveAnalysis() {
   const onMsg = useCallback((m: StreamMsg) => {
     if (m.type === "session") setSession(m);
     else if (m.type === "window") setWindows((w) => [...w, m]);
+    else if (m.type === "context") setCtx(m);
     else if (m.type === "final") {
       setFinal(m);
       setRunning(false);
@@ -68,6 +72,7 @@ export default function LiveAnalysis() {
     setSession(null);
     setWindows([]);
     setFinal(null);
+    setCtx(null);
     setErr("");
     setRunning(true);
     closer.current = openStream(
@@ -234,6 +239,14 @@ export default function LiveAnalysis() {
             </p>
           </Card>
         )}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ContextPanel context={final?.context ?? ctx?.context ?? null} />
+        <TranscriptPanel
+          transcript={final?.transcript ?? ctx?.transcript ?? null}
+          quotes={final?.context_quotes ?? ctx?.quotes ?? []}
+        />
       </div>
 
       {final && (

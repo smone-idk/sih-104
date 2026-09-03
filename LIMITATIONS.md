@@ -371,6 +371,36 @@ _(updated at the end of each build phase)_
     clips now report `SYNTHETIC_SUSPECTED` when synthesis is detected, rather
     than discarding the synthetic signal as `INDETERMINATE` (which two Piper
     clips previously did).
+- **Phase 3 (ASR + context engine):**
+  - **The context engine is `HEURISTIC` — regex and rules, not a classifier.**
+    It will miss paraphrases it has no pattern for. §5 asked for "rule + regex +
+    small classifier"; only the rule/regex half is built. Coverage on our five
+    scam scripts is 6/6 signals on the CEO script, 5/6 on the govt summons, 4/6
+    on the bank OTP, 3/6 on the family emergency, and **0/6 on the benign
+    control** — but those are the scripts the lexicons were written against, so
+    that is a sanity check, not a generalisation measurement.
+  - **Whisper mis-transcribes the XTTS clones.** Cloned audio produces garbled
+    spans ("your CFO Dharuddin Naimukh"). The fraud-bearing content survives, but
+    a context signal can be missed because ASR mangled the phrase carrying it.
+    Word error rate is not measured — we have no reference transcripts.
+  - **Quote timestamps are interpolated within the utterance**, not word-level
+    forced alignment. Good enough to point a judge at the right moment; not
+    evidence-grade timing.
+  - **Negation handling is a 25-character lookback** for a small negator list.
+    It fixes "Nothing urgent" but will not catch distant or complex negation
+    ("I would not say this is urgent, but...").
+  - **The enterprise directory is demo data and the mapping is authored.** Each
+    scenario declares which directory record its number resolves to. That is
+    legitimate call-setup metadata (§2 Tier C) and is labelled DEMO DATA in the
+    UI — but it is authored, not measured, and it does move the score
+    (`caller_trust`, weight 0.10). On the genuine control it is 0.08; on the
+    attack scenarios ~0.95.
+  - **Short clips get little context.** Utterances shorter than
+    `asr_min_segment_seconds` produce no transcript, so a ~6 s clip can score on
+    acoustics alone (the family-emergency scenario lands MEDIUM with 0 quotes).
+  - **Hindi/Punjabi lexicons exist but are untested** — a handful of Hinglish
+    terms are in the patterns, with no Hindi/Punjabi audio in the corpus to
+    exercise them. Do not read their presence as language support.
 - **Corpus, as built (v1):**
 
   | tier | clips | total | min / median / max | native sr |

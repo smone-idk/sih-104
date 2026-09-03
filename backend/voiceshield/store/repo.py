@@ -89,6 +89,20 @@ def match_directory(name_hint: str | None) -> dict[str, Any] | None:
         conn.close()
 
 
+def get_contact(display_name: str | None) -> dict[str, Any] | None:
+    """Exact directory lookup. DEMO DATA (§2 Tier C)."""
+    if not display_name:
+        return None
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM directory_contacts WHERE display_name = ?",
+            (display_name,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def unknown_caller() -> dict[str, Any]:
     conn = connect()
     try:

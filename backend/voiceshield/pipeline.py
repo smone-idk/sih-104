@@ -75,6 +75,8 @@ class AnalysisResult:
     findings: list[Finding] = field(default_factory=list)
     voice_verdict: str = "INDETERMINATE"
     vad_backend: str = ""
+    transcript: dict = field(default_factory=dict)
+    context_quotes: list = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -93,6 +95,8 @@ class AnalysisResult:
             "voice_verdict": self.voice_verdict,
             "findings": [f.as_dict() for f in self.findings],
             "vad_backend": self.vad_backend,
+            "transcript": self.transcript,
+            "context_quotes": self.context_quotes,
             "fusion": self.fusion.as_dict(),
             "detector_means": {
                 k: (None if v is None else round(v, 4))
@@ -270,6 +274,13 @@ class WindowScorer:
             final.band_from_score, verdict, self.s)
         return final, findings, verdict, detector_means, agg_inputs
 
+    def set_context(self, components: dict[str, Any]) -> None:
+        """Wire in context-derived components (§5). Called by the batch path
+        after transcription, and by the streaming ASR worker as segments land —
+        the acoustic loop keeps ticking at 1 Hz either way (§4)."""
+        self.ctx["context_components"] = components
+        self.ctx_inputs = _context_inputs(self.ctx)
+
     def detector_latencies(self) -> dict[str, float]:
         return {f"detector.{n}": float(np.mean(v))
                 for n, v in self.det_latency.items() if v}
@@ -313,6 +324,36 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
     if n_speech == 0:
         warnings.append("no speech detected — score is not meaningful")
 
+    # --- ASR + context (§4, §5) -------------------------------------
+    # Runs over VAD-segmented utterances, NOT per acoustic window. Batch does it
+    # here, in one pass, before the single fusion; streaming does the same thing
+    # incrementally via WindowScorer.set_context().
+    transcript_d: dict = {}
+    context_quotes: list = []
+    run_asr = s.asr_enabled and ctx.get("asr", True) and bool(n_speech)
+    if run_asr or ctx.get("directory"):
+        t_asr = time.perf_counter()
+        try:
+            from .asr.segmenter import transcribe_utterances
+            from .asr.worker import Transcript
+            from .context.engine import analyze_context
+
+            tr = (transcribe_utterances(audio, sr, vad.segments,
+                                        language=ctx.get("language"))
+                  if run_asr else Transcript())
+            cres = analyze_context(tr, ctx.get("directory"))
+            scorer.set_context(cres.components)
+            transcript_d = tr.as_dict()
+            context_quotes = cres.quotes()
+            transcript_d["context"] = cres.as_dict()
+            lat["asr_context"] = (time.perf_counter() - t_asr) * 1000
+            if run_asr and not tr.text.strip():
+                warnings.append(
+                    "ASR produced no text — transcript-derived context layers "
+                    "unavailable and their weight redistributed")
+        except Exception as exc:                     # never break acoustic analysis
+            warnings.append(f"ASR/context failed: {type(exc).__name__}: {exc}")
+
     final, findings, verdict, detector_means, _ = scorer.aggregate()
     baseline_means = scorer.baseline_means
     lat.update(scorer.detector_latencies())
@@ -335,7 +376,9 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
         findings=findings,
         voice_verdict=verdict,
         vad_backend=vad.backend,
-        context={"components_wired": False, "phase": 1,
+        transcript=transcript_d,
+        context_quotes=context_quotes,
+        context={"components_wired": bool(transcript_d), "phase": 3,
                  **{k: v for k, v in ctx.items() if k in ("scenario", "channel")}},
         warnings=warnings,
     )

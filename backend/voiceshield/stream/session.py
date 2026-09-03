@@ -23,6 +23,7 @@ import numpy as np
 from ..config import get_settings
 from ..ingest import vad as vad_mod
 from ..ingest.telephony import TelephonyConfig, degrade
+from ..asr.worker import Transcript, TranscriptSegment
 from ..pipeline import WindowScore, WindowScorer
 
 
@@ -69,6 +70,20 @@ class StreamSession:
         self._total_samples = 0
         self.closed = False
 
+        # --- ASR utterance buffering (§4) ---------------------------
+        # Separate from the acoustic window buffer: utterances cross window
+        # boundaries, and the ASR cadence (3-6 s) is not the acoustic one (1 Hz).
+        self._utt_buf = np.zeros(0, dtype=np.float32)
+        self._utt_start = 0.0          # session time of _utt_buf[0]
+        self._utt_index = 0
+        self.transcript = Transcript()
+        self.context = None            # latest ContextResult
+        # Directory metadata is known when the call opens, so seed the context
+        # now. Otherwise caller_trust would stay unavailable until the first
+        # transcript landed — and on a clip too short to transcribe, forever.
+        if self.ctx.get("directory"):
+            self.apply_transcript([])
+
     # --- input ------------------------------------------------------
     def feed(self, samples: np.ndarray) -> list[WindowScore]:
         """Append audio; return every window that became complete."""
@@ -78,6 +93,7 @@ class StreamSession:
         if self.telephony.enabled:
             x, _ = degrade(x, self.sr, self.telephony, seed=self._index)
         self._buf = np.concatenate([self._buf, x])
+        self._utt_buf = np.concatenate([self._utt_buf, x])
         self._total_samples += len(x)
 
         out: list[WindowScore] = []
@@ -94,6 +110,65 @@ class StreamSession:
                 self._buf = self._buf[drop:]
                 self._buf_origin = self._next_start
         return out
+
+    # --- ASR utterance segmentation ---------------------------------
+    def pending_utterances(self, force: bool = False) -> list[tuple[float, np.ndarray]]:
+        """Return closed utterances ready for transcription, as
+        (session t_start, samples). Uses the SAME Silero VAD as the acoustic
+        loop — one segmentation source of truth (docs/PHASES.md Phase 3)."""
+        out: list[tuple[float, np.ndarray]] = []
+        lo = self.s.asr_min_segment_seconds
+        hi = self.s.asr_max_segment_seconds
+        while True:
+            dur = len(self._utt_buf) / self.sr
+            if dur <= 0:
+                break
+            cut: float | None = None
+            if dur >= hi:
+                cut = hi                      # hard cap so context never stalls
+            elif dur >= lo:
+                # close on a trailing pause, so we cut between sentences
+                vr = vad_mod.analyze(self._utt_buf, self.sr)
+                if vr.segments:
+                    last_end = vr.segments[-1].end
+                    if dur - last_end >= self.s.vad_min_silence_ms / 1000.0:
+                        cut = last_end
+                elif not vr.segments:
+                    cut = dur                 # all silence: drop it
+            elif force and dur >= 0.4:
+                cut = dur
+            if cut is None:
+                break
+            n = min(len(self._utt_buf), int(round(cut * self.sr)))
+            seg = self._utt_buf[:n]
+            if np.any(np.abs(seg) > 1e-4):
+                out.append((self._utt_start, seg.copy()))
+            self._utt_buf = self._utt_buf[n:]
+            self._utt_start += n / self.sr
+            if not force and len(out) >= 2:
+                break
+        return out
+
+    def apply_transcript(self, segs: list[TranscriptSegment]):
+        """Fold new ASR output into the rolling transcript, re-run the context
+        engine and push the components into the scorer. The acoustic loop keeps
+        ticking at 1 Hz regardless — the two cadences are independent (§4)."""
+        from ..context.engine import analyze_context
+
+        if segs:
+            self.transcript.add(segs)
+        self.context = analyze_context(self.transcript, self.ctx.get("directory"))
+        self.scorer.set_context(self.context.components)
+        return self.context
+
+    def context_payload(self) -> dict:
+        return {
+            "type": "context",
+            "session_id": self.meta.session_id,
+            "transcript": self.transcript.as_dict(),
+            "context": self.context.as_dict() if self.context else None,
+            "quotes": self.context.quotes() if self.context else [],
+        }
 
     def flush(self) -> list[WindowScore]:
         """Score the trailing remainder (zero-padded), as batch mode does."""
@@ -187,9 +262,14 @@ class StreamSession:
             "n_windows": len(self.scorer.windows),
             "n_speech_windows": self.scorer.n_speech,
             "duration_s": round(self._total_samples / self.sr, 3),
+            "transcript": self.transcript.as_dict(),
+            "context_quotes": self.context.quotes() if self.context else [],
+            "context": self.context.as_dict() if self.context else None,
             "warnings": warnings,
         }
 
     def close(self) -> None:
         self.closed = True
-        self._buf = np.zeros(0, dtype=np.float32)   # §12 — audio not retained
+        # §12 — audio is not retained after the session ends
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._utt_buf = np.zeros(0, dtype=np.float32)

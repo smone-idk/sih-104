@@ -23,7 +23,13 @@ class Scenario:
     tier: str                # genuine | synthetic | cloned
     expected: str            # what a working system SHOULD do — not a hardcoded score
     relpath: str
+    #: who the caller SAYS they are
     caller_claims: str = ""
+    #: which enterprise-directory record the caller's number resolves to.
+    #: DEMO DATA (§2 Tier C) — the attacks come from unknown numbers claiming a
+    #: identity they cannot substantiate; the genuine calls come from the real
+    #: contact's number. This is metadata, not anything derived from the audio.
+    directory_contact: str = "Unknown Caller"
     language: str = "en"
 
     def path(self) -> Path:
@@ -64,6 +70,7 @@ SCENARIOS: list[Scenario] = [
         expected="CLONED_VOICE; credential solicitation once context lands (Phase 3)",
         relpath="cloned/cloned_bank_otp_en_p1.wav",
         caller_claims="HDFC Fraud Dept (claimed)",
+        directory_contact="HDFC Fraud Dept (claimed)",
     ),
     Scenario(
         id="govt_summons_synthetic",
@@ -73,6 +80,7 @@ SCENARIOS: list[Scenario] = [
         expected="synthetic markers present AND speaker mismatch -> SYNTHETIC_OTHER",
         relpath="synthetic/synthetic_govt_summons_en_p1.wav",
         caller_claims="Inspector Verma (claimed)",
+        directory_contact="Inspector Verma (claimed)",
     ),
     Scenario(
         id="family_emergency_synthetic",
@@ -92,6 +100,7 @@ SCENARIOS: list[Scenario] = [
         expected="no synthetic markers, speaker matches -> CONSISTENT, band LOW",
         relpath="genuine/enrolled_1272_1272-128104-0002.wav",
         caller_claims="Rajesh Sharma — CFO",
+        directory_contact="Rajesh Sharma",
     ),
     Scenario(
         id="genuine_other_speaker",
@@ -102,6 +111,7 @@ SCENARIOS: list[Scenario] = [
         expected="no synthetic markers, speaker mismatch -> SPEAKER_MISMATCH",
         relpath="genuine/genuine_1462_1462-170138-0000.wav",
         caller_claims="Rajesh Sharma — CFO",
+        directory_contact="Priya Nair",
     ),
 ]
 

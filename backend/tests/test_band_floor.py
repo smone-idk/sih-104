@@ -88,12 +88,18 @@ def enrolled_ctx():
 
 def test_both_cloned_scenarios_land_high_without_context(enrolled_ctx):
     """THE gate: a judge uploading a clone with no scam script must still get
-    HIGH. Context components are absent here — Phase 3 is not wired."""
+    HIGH from the acoustic layers alone.
+
+    ASR is explicitly disabled here so 'context absent' is real, not incidental.
+    If this ever passes only because the context engine lifted the score, the
+    fusion problem it guards has quietly come back.
+    """
     for sid in ("ceo_transfer_cloned", "bank_otp_cloned"):
         sc = scen.get(sid)
         if not sc.path().exists():
             pytest.skip("demo corpus not built")
-        d = analyze_file(sc.path(), ctx=dict(enrolled_ctx)).as_dict()
+        d = analyze_file(sc.path(),
+                         ctx={**enrolled_ctx, "asr": False}).as_dict()
         assert d["voice_verdict"] == "CLONED_VOICE", sid
         assert d["band"] == "HIGH", (sid, d["score"], d["band"])
         assert "transaction_context" in d["fusion"]["unavailable_components"]
@@ -101,12 +107,13 @@ def test_both_cloned_scenarios_land_high_without_context(enrolled_ctx):
 
 
 def test_every_cloned_clip_lands_high(enrolled_ctx):
+    """Acoustic layers only — no context assistance."""
     clips = sorted(glob.glob(str(get_settings().demo_assets_dir / "cloned" / "*.wav")))
     if not clips:
         pytest.skip("cloned tier not built")
     bad = []
     for f in clips:
-        d = analyze_file(f, ctx=dict(enrolled_ctx)).as_dict()
+        d = analyze_file(f, ctx={**enrolled_ctx, "asr": False}).as_dict()
         if d["band"] != "HIGH":
             bad.append((f.split("/")[-1], d["score"], d["band"], d["voice_verdict"]))
     assert not bad, f"cloned clips below HIGH: {bad}"
@@ -117,7 +124,7 @@ def test_genuine_control_stays_low(enrolled_ctx):
     sc = scen.get("genuine_control")
     if not sc.path().exists():
         pytest.skip("demo corpus not built")
-    d = analyze_file(sc.path(), ctx=dict(enrolled_ctx)).as_dict()
+    d = analyze_file(sc.path(), ctx={**enrolled_ctx, "asr": False}).as_dict()
     assert d["band"] == "LOW"
     assert d["fusion"]["floors_applied"] == []
 

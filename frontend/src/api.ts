@@ -103,6 +103,58 @@ export interface Finding {
   evidence: Record<string, unknown>;
 }
 
+export interface ContextQuote {
+  quote: string;
+  start: number;
+  end: number;
+  rule: string;
+  t_start: number | null;
+  t_end: number | null;
+  utterance_index: number | null;
+  signal: string;
+}
+
+export interface SignalData {
+  name: string;
+  value: number;
+  kind: DetectorKind;
+  matches: Omit<ContextQuote, "signal">[];
+  detail: Record<string, unknown>;
+}
+
+export interface TranscriptSegmentData {
+  index: number;
+  t_start: number;
+  t_end: number;
+  text: string;
+  language: string;
+  no_speech_prob: number;
+}
+
+export interface TranscriptData {
+  text: string;
+  segments: TranscriptSegmentData[];
+  n_segments: number;
+  duration_s: number;
+}
+
+export interface ContextData {
+  signals: Record<string, SignalData>;
+  components: Record<string, { value: number; available: boolean; note: string }>;
+  directory: Record<string, unknown> | null;
+  transcript_chars: number;
+  kind: DetectorKind;
+  note: string;
+}
+
+export interface ContextMsg {
+  type: "context";
+  session_id: string;
+  transcript: TranscriptData;
+  context: ContextData | null;
+  quotes: ContextQuote[];
+}
+
 export interface AppliedFloor {
   code: string;
   description: string;
@@ -146,12 +198,16 @@ export interface FinalMsg {
   n_windows: number;
   n_speech_windows: number;
   duration_s: number;
+  transcript: TranscriptData;
+  context_quotes: ContextQuote[];
+  context: ContextData | null;
   warnings: string[];
 }
 
 export type StreamMsg =
   | SessionMsg
   | WindowMsg
+  | ContextMsg
   | FinalMsg
   | { type: "error"; error: string };
 

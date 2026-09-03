@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     ema_alpha: float = 0.3
     asr_min_segment_seconds: float = 3.0
     asr_max_segment_seconds: float = 6.0
+    #: "" = auto-detect. Corpus is English-only in v1; Hindi/Punjabi keyword
+    #: lists exist but have no audio to test against (see LIMITATIONS.md).
+    asr_language: str = ""
+    asr_beam_size: int = 1          # greedy: fast enough to keep the 1 Hz loop clear
+    asr_enabled: bool = True
 
     #: fp16 for the SSL anti-spoofing backbone on CUDA (halves its VRAM)
     use_fp16: bool = True

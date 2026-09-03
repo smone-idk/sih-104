@@ -35,9 +35,14 @@ def test_result_shape_and_explainability(real_speech):
                 "contribution_points", "available", "note"} <= set(c)
     assert res["fusion"]["disclaimer"]
     assert res["latency_ms"]["total"] > 0
-    # context components are not wired in Phase 1 -> weights redistributed
+    # context IS wired from Phase 3, so transcript + quote fields must be present
+    assert "transcript" in res and "context_quotes" in res
+    # caller_trust has no directory record here -> still unavailable, and its
+    # weight must be redistributed rather than substituted
+    assert "caller_trust" in res["fusion"]["unavailable_components"]
     assert res["fusion"]["redistributed"] is True
-    assert "transaction_context" in res["fusion"]["unavailable_components"]
+    eff = sum(c["effective_weight"] for c in comps)
+    assert eff == pytest.approx(1.0, abs=1e-3)
 
 
 def test_two_different_clips_give_two_different_scores():

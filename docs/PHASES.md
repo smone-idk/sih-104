@@ -335,6 +335,67 @@ can mask the problem.
 
 ---
 
+## Phase 3 — Whisper worker + context engine ✅
+
+**Gate:** every context flag traces to a transcript quote — **PASSED**, and
+enforced in code: `SignalResult.__post_init__` raises if a signal has a non-zero
+value with no matched span, so a quote-less flag cannot be constructed.
+
+Measured over the WebSocket (identical settings, enrolled profile, per-scenario
+directory record):
+
+| scenario | score | band | verdict | quotes | caller_trust | floor |
+|---|---|---|---|---|---|---|
+| Genuine call — control | **4.0** | **LOW** | CONSISTENT | 0 | 0.08 | — |
+| Genuine, different human | 23.6 | LOW | SPEAKER_MISMATCH | 0 | 0.15 | — |
+| CEO transfer (clone) | 62.4 | **HIGH** | CLONED_VOICE | **5** | 0.95 | yes |
+| Bank OTP (clone) | 45.5 | **HIGH** | CLONED_VOICE | 1 | 0.97 | yes |
+| Govt summons (Piper) | 81.6 | HIGH | SYNTHETIC_OTHER | 0 | 0.98 | — |
+| Family emergency (Piper) | 56.3 | MEDIUM | SYNTHETIC_OTHER | 0 | 0.95 | — |
+
+Example traced flags on the cloned CEO call — each is a real Whisper transcript
+span with an interpolated timestamp:
+
+| t | signal | rule | quote |
+|---|---|---|---|
+| 0.3 s | authority_claim | exec_claim | “this is Rajesh Sharma, your CFO” |
+| 10.6 s | urgency | pressure | “I'll be quick” |
+| 14.7 s | transaction_intent | amount | “25 lakh” → **₹25,00,000** |
+| 16.6 s | transaction_intent | account_change | “new vendor” |
+| 18.4 s | urgency | deadline | “before end of day” |
+
+**Two cadences, visibly independent (§4):** 18 acoustic windows at 1 Hz against
+5 context frames as utterances closed, with quotes accumulating 1 → 2 → 4 → 5.
+Whisper runs in a thread executor so it never blocks the 1 Hz loop.
+
+**Built:** `asr/worker.py` (faster-whisper, loaded once, `Transcript` with char
+offsets), `asr/segmenter.py` (utterances from the shared VAD pass),
+`context/signals.py` (6 signal families, Indian amount parser, negation guard),
+`context/engine.py` (components + quote resolution), plus the Context and
+Transcript panels.
+
+**Things this surfaced and fixed:**
+- **“twenty-five lakh” parsed as ₹5,00,000** — the hyphen broke compound-number
+  matching so only “five lakh” matched, understating the amount 5×. Replaced the
+  word-number lookup with a real tens+units parser.
+- **False positive on the genuine control**: “Nothing urgent” fired the urgency
+  flag. Added a negation guard; the benign script now fires **0/6** signals, and
+  a test pins it.
+- **`caller_trust` was gated behind transcript arrival.** Directory metadata is
+  known at call setup and has nothing to do with ASR, so on a clip too short to
+  transcribe it would have stayed unavailable forever. Now seeded at session start.
+- **The directory record was hardcoded to “Unknown Caller” for every session**,
+  which charged the honest control 9.8 points for something never measured from
+  its audio. Each scenario now declares which directory record its number
+  resolves to; the genuine control resolves to the real Rajesh Sharma (0.08).
+
+89 tests pass; `make grep-honesty` clean. Verified in a real browser, no JS errors.
+
+**Not done here:** policy engine / mock approval (Phase 4), and the amount is
+extracted but nothing is blocked on it yet.
+
+---
+
 ## Phase 3 — segmentation decision (made before wiring)
 
 Whisper wants utterance-shaped input, which would be a third granularity beside
