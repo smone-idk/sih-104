@@ -24,12 +24,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# thresholds for calling a layer "high" — deliberately conservative, and
-# exposed here rather than buried, because they shape what the UI announces.
-SYNTHETIC_HIGH = 0.65
-SYNTHETIC_LOW = 0.35
-SPEAKER_MISMATCH_HIGH = 0.60   # speaker_consistency score (higher = less similar)
-SPEAKER_MATCH_LOW = 0.40
+from ..config import get_settings
+
+# Thresholds live in Settings so they are configurable at runtime rather than
+# being literals buried in the verdict logic (see config.py).
 
 
 @dataclass
@@ -52,9 +50,14 @@ class Finding:
         }
 
 
-def derive_findings(components: dict[str, Any]) -> tuple[list[Finding], str]:
+def derive_findings(components: dict[str, Any],
+                    settings=None) -> tuple[list[Finding], str]:
     """`components` maps component name -> ComponentInput-like object with
     .value / .available / .kind / .detail. Returns (findings, voice_verdict)."""
+    s = settings or get_settings()
+    SYNTHETIC_HIGH = s.synthetic_high_threshold
+    SPEAKER_MISMATCH_HIGH = s.speaker_mismatch_threshold
+    SPEAKER_MATCH_LOW = s.speaker_match_threshold
     syn = components.get("voice_authenticity")
     spk = components.get("speaker_consistency")
 
@@ -118,6 +121,13 @@ def derive_findings(components: dict[str, Any]) -> tuple[list[Finding], str]:
             verdict = "SPEAKER_MISMATCH"
         elif not syn_high and spk_match:
             verdict = "CONSISTENT"
+        # Speaker similarity between the two thresholds is a deliberate dead
+        # band: we cannot say "same person" or "different person". That must not
+        # discard what we DO know about synthesis.
+        elif syn_high:
+            verdict = "SYNTHETIC_SUSPECTED"
+        else:
+            verdict = "INDETERMINATE"
 
     if not findings:
         findings.append(Finding(

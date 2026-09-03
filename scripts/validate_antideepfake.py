@@ -41,12 +41,22 @@ TIERS = {
 TELE = TelephonyConfig(enabled=True, mu_law=True, add_noise=False)
 
 
-def clip_score(det, path: str, telephony: bool) -> float:
+def noise_cfg(snr_db: float) -> TelephonyConfig:
+    """Additive white noise at a target SNR, WITHOUT narrowbanding or mu-law —
+    isolates the noise-floor variable."""
+    return TelephonyConfig(enabled=True, narrowband_hz=16000, mu_law=False,
+                           add_noise=True, snr_db=snr_db)
+
+
+def clip_score(det, path: str, telephony: bool,
+               noise_snr: float | None = None) -> float:
     """Mean detector score over the clip's speech windows — the same
     aggregation the pipeline uses, so these numbers transfer."""
     audio, sr = load_audio(path)
     if telephony:
         audio, sr = degrade(audio, sr, TELE)
+    if noise_snr is not None:
+        audio, sr = degrade(audio, sr, noise_cfg(noise_snr))
     vr = vad_mod.analyze(audio, sr)
     vals = [det.analyze(w.samples, sr).score
             for w in iter_windows(audio, sr)
@@ -117,6 +127,10 @@ def separation(a: np.ndarray, b: np.ndarray) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-telephony", action="store_true")
+    ap.add_argument("--noise-sweep", action="store_true",
+                    help="also score every tier at 20/10/5 dB additive SNR. Tests "
+                         "whether separation depends on our synthetic tiers having "
+                         "no room tone (i.e. keying on digital silence).")
     args = ap.parse_args()
 
     dets = {}
@@ -175,6 +189,35 @@ def main() -> int:
                   f"{c['vs_cloned_xtts']['auc']:>11.3f}")
     print("\nAUC = P(attack clip scores above a genuine clip). 0.5 = no separation, "
           "1.0 = perfect.\nThreshold-free, so it cannot be tuned.")
+
+    # --- noise sweep ---------------------------------------------------
+    if args.noise_sweep:
+        print(f"\n\n{'='*100}\nNOISE SWEEP — identical additive white noise applied to EVERY tier.")
+        print("If separation depended on our synthetic tiers lacking room tone, "
+              "equalising the\nnoise floor would collapse it.\n")
+        print(f"{'model':<28} {'SNR':>8} {'genuine':>9} {'piper':>9} {'cloned':>9} "
+              f"{'AUC piper':>10} {'AUC cloned':>11}")
+        print("-" * 100)
+        sweep: dict = {}
+        for dname, det in dets.items():
+            if not det.available:
+                continue
+            sweep[dname] = {}
+            for snr in (None, 20.0, 10.0, 5.0):
+                sc = {t: np.array([clip_score(det, f, False, snr)
+                                   for f in sorted(glob.glob(p))])
+                      for t, p in TIERS.items()}
+                lbl = "clean" if snr is None else f"{snr:g} dB"
+                vp = separation(sc["genuine"], sc["piper"])
+                vc = separation(sc["genuine"], sc["cloned_xtts"])
+                sweep[dname][lbl] = {
+                    "means": {k: round(float(np.nanmean(v)), 4) for k, v in sc.items()},
+                    "vs_piper": vp, "vs_cloned_xtts": vc,
+                }
+                print(f"{dname:<28} {lbl:>8} {np.nanmean(sc['genuine']):>9.4f} "
+                      f"{np.nanmean(sc['piper']):>9.4f} {np.nanmean(sc['cloned_xtts']):>9.4f} "
+                      f"{vp['auc']:>10.3f} {vc['auc']:>11.3f}")
+        report["noise_sweep"] = sweep
 
     out = REPO / "data" / "eval" / "detector_validation.json"
     out.parent.mkdir(parents=True, exist_ok=True)

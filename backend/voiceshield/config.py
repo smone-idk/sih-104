@@ -82,6 +82,25 @@ class Settings(BaseSettings):
     band_low_max: float = 40.0
     band_high_min: float = 70.0
 
+    # --- verdict thresholds (fusion/findings.py 2x2) ---
+    #: synthetic_probability at/above this counts as "machine-generated"
+    synthetic_high_threshold: float = 0.65
+    #: speaker_consistency score AT OR BELOW this counts as "matches the
+    #: enrolled speaker" (the score is a suspicion score: low = same person)
+    speaker_match_threshold: float = 0.40
+    #: speaker_consistency score at/above this counts as "different speaker"
+    speaker_mismatch_threshold: float = 0.60
+
+    # --- band floors (policy/rules.py) ---
+    #: A weighted linear blend cannot express "synthetic AND matches the target".
+    #: High speaker similarity legitimately LOWERS speaker_consistency risk, so a
+    #: successful clone of the enrolled person scores lower than crude TTS in a
+    #: stranger's voice — backwards for PS26104. Rather than reweighting (which
+    #: would break the honest per-component semantics), a named rule floors the
+    #: BAND when the CLONED_VOICE verdict fires. The score is left untouched.
+    enable_band_floors: bool = True
+    cloned_voice_band_floor: str = "HIGH"
+
     # --- model ids / weights ---
     ecapa_source: str = "speechbrain/spkrec-ecapa-voxceleb"
     whisper_model: str = "small"

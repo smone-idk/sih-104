@@ -20,6 +20,7 @@ import numpy as np
 from .config import get_settings
 from .fusion.findings import Finding, derive_findings
 from .fusion.scorer import ComponentInput, FusionResult, fuse
+from .policy.rules import apply_band_floors
 from .fusion.smoothing import EMA
 from .ingest.audio import load_audio
 from .ingest.chunker import iter_windows
@@ -261,7 +262,12 @@ class WindowScorer:
 
         agg_inputs.update(self.ctx_inputs)
         final = fuse(agg_inputs, self.ctx.get("weights"), self.s)
-        findings, verdict = derive_findings(agg_inputs)
+        findings, verdict = derive_findings(agg_inputs, self.s)
+        # A linear blend cannot express "synthetic AND matches the target", so a
+        # named rule floors the band. Applied HERE, in the one place batch and
+        # streaming converge, so both paths get it (§14). See policy/rules.py.
+        final.band, final.floors_applied = apply_band_floors(
+            final.band_from_score, verdict, self.s)
         return final, findings, verdict, detector_means, agg_inputs
 
     def detector_latencies(self) -> dict[str, float]:

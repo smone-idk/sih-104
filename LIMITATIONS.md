@@ -156,6 +156,66 @@ failed, plus a confound check:
 Reproduce with `python scripts/validate_antideepfake.py`; results are written to
 `data/eval/detector_validation.json` and are what the Phase 6 Evaluation page
 reads.
+
+#### How much of AUC 1.000 is in-distribution
+
+We checked the AntiDeepfake paper's own corpus table (arXiv 2506.21090, Table I
+and §IV-A). The two sides of our test are **not** symmetric:
+
+| our tier | in the model's training data? |
+|---|---|
+| genuine (LibriSpeech dev-clean) | **effectively yes.** The bonafide set includes **LibriTTS**, **LibriTTS-R** and **Multilingual LibriSpeech (MLS)** — all LibriVox-derived, the same source corpus family and recording conditions as LibriSpeech. Speaker-level overlap is not verifiable from the paper. |
+| Piper TTS | **no.** Piper is not mentioned anywhere in the paper. |
+| XTTS-v2 clones | **no.** XTTS/Coqui are not mentioned anywhere in the paper. |
+
+So the near-zero genuine scores (0.0003) are **flattered by in-distribution
+data** — this model has seen a great deal of LibriVox-style audiobook speech and
+is confident it is real. The attack side is genuinely out-of-distribution, so
+detecting Piper and XTTS at AUC 1.000 *is* a real generalization result. The
+honest summary: **the hard half of the result is real; the easy half is easy.**
+A genuine-speech corpus outside the LibriVox family (spontaneous, telephony,
+Indian-accent) is needed before the false-positive rate means anything.
+
+#### Noise robustness — the ranking survives, the calibration does not
+
+Our synthetic tiers are rendered TTS with no room tone, so the detector could
+have been separating on *digital silence* rather than synthesis. Test: apply
+identical additive white noise to **every** tier, equalising the noise floor.
+
+| SNR | genuine | Piper | XTTS-cloned | AUC Piper | AUC cloned |
+|---|---|---|---|---|---|
+| clean | 0.0003 | 1.0000 | 1.0000 | 1.000 | 1.000 |
+| 20 dB | 0.0025 | 0.8080 | 0.7947 | 1.000 | 1.000 |
+| 10 dB | 0.0202 | 0.3607 | 0.3306 | 0.967 | 0.960 |
+| 5 dB | 0.0708 | 0.3813 | 0.1874 | 0.902 | 0.823 |
+
+**Good news:** the confound is ruled out. Separation does not collapse when the
+noise floor is equalised — AUC stays 1.000 at 20 dB and above 0.82 even at 5 dB.
+The detector responds to synthesis, not to silence.
+
+> **⚠ Bad news, and this is the most operationally serious limitation we have
+> measured. Absolute scores collapse with noise even though ranking holds.**
+> Attack means fall from 1.00 (clean) to ~0.33 (10 dB) — **below our
+> `synthetic_high_threshold` of 0.65**. The verdict therefore flips, and with it
+> the `CLONED_VOICE` band floor. Measured end-to-end on the cloned CEO clip:
+>
+> | SNR | score | band | verdict | synthetic prob |
+> |---|---|---|---|---|
+> | clean | 61.0 | **HIGH** | CLONED_VOICE | 1.000 |
+> | 20 dB | 58.9 | **HIGH** | CLONED_VOICE | 0.929 |
+> | 10 dB | 25.9 | **LOW** | CONSISTENT | 0.201 |
+> | 5 dB | 24.2 | **LOW** | CONSISTENT | 0.107 |
+>
+> **At 10 dB SNR the clone evades the system completely.** Real phone calls
+> routinely sit at 10–20 dB. The ranking is still good at 10 dB (AUC 0.960), so
+> this is a *calibration* failure, not a detection failure: a fixed threshold
+> tuned on clean audio is wrong under noise. The fix is an SNR estimate feeding
+> a noise-conditioned threshold (or score normalisation against a per-condition
+> reference), which is real work and is **not** in the prototype. We have not
+> lowered the threshold to hide this — doing so would raise false positives on
+> clean genuine audio, trading a measured weakness for an unmeasured one.
+>
+> Reproduce: `python scripts/validate_antideepfake.py --noise-sweep`.
 - **ECAPA-TDNN** trained on VoxCeleb (English, mostly celebrity interview
   audio). Accent and channel mismatch with Indian telephony speech will move
   the operating point; not compensated for in v1.
@@ -291,6 +351,49 @@ _(updated at the end of each build phase)_
   - The corpus grew to 15 Piper + 15 XTTS clips by splitting each of the 5 scam
     scripts into 3 chunks — **same 5 scenarios, more audio**, not 30 independent
     scenarios. Clip counts overstate scenario diversity.
+- **Phase 2.5 (fusion band floor):**
+  - **The score and the band can now disagree, by design.** A `CLONED_VOICE`
+    verdict floors the band at HIGH while leaving the score untouched, so the UI
+    can read "61.0 / HIGH". That is deliberate: the number stays an honest
+    report of what the linear blend computed, and the band carries a named,
+    stated rule. The alternative — reweighting until the clone outranks Piper —
+    would have distorted component semantics that are individually correct.
+  - **The floor is a rule, not a model.** It encodes an expert judgement ("a
+    clone of the target is at least HIGH risk"), not anything fitted to data.
+    It is exactly as unvalidated as the fusion weights are, and is listed here
+    rather than presented as a detection capability.
+  - **The floor inherits the detector's noise fragility.** It only fires when
+    `CLONED_VOICE` fires, which needs synthetic probability ≥ 0.65 — see the
+    noise table in §3. At 10 dB SNR the verdict does not fire, so the floor does
+    not either. The floor fixes an *ordering* problem, not a *sensitivity* one.
+  - **Speaker dead band.** Similarity between `speaker_match_threshold` (0.40)
+    and `speaker_mismatch_threshold` (0.60) is deliberately "cannot say". Such
+    clips now report `SYNTHETIC_SUSPECTED` when synthesis is detected, rather
+    than discarding the synthetic signal as `INDETERMINATE` (which two Piper
+    clips previously did).
+- **Corpus, as built (v1):**
+
+  | tier | clips | total | min / median / max | native sr |
+  |---|---|---|---|---|
+  | genuine (LibriSpeech dev-clean, 8 speakers) | 32 | 274 s | 2.3 / 8.3 / 15.9 s | 16 kHz |
+  | Piper synthetic | 15 | 121 s | 3.9 / 8.0 / 11.6 s | 22.05 kHz |
+  | XTTS cloned | 15 | 192 s | 8.7 / 12.7 / 20.5 s | 24 kHz |
+  | ASVspoof2019 LA dev (wrapper control) | 86 | 308 s | 1.3 / 3.4 / 7.8 s | 16 kHz |
+
+  Note the duration spread differs by tier (cloned clips are the longest), and
+  each tier has a single native sample rate — a nuisance variable we tested for
+  and ruled out (§3), but one a larger corpus should balance rather than rely on
+  a control for.
+- **Languages: English only in v1. Hindi and Punjabi are CUT, not pending.**
+  Zero `hi_*`/`pa_*` clips exist. Mozilla Common Voice Hindi needs a manual
+  click-through download, and we have no Hindi/Punjabi synthetic or cloned tier
+  at all, so there would be nothing to evaluate against. Whisper's ASR is
+  multilingual and the acoustic layers are largely language-agnostic, so the
+  pipeline would *run* on Hindi audio — but running is not evidence. Claiming
+  three languages on the strength of an untested code path is exactly the kind
+  of ten-language-dropdown-that-does-nothing §10 warns against. Listed as future
+  work with its actual cost: Indian-language spoof data collection and
+  per-language prosody baselines.
   - **TTS toolchain is a second, isolated venv** (`tools/.venv-tts`).
     `coqui-tts` requires `transformers>=4.57,<5` (5.x removed
     `isin_mps_friendly`, which XTTS's GPT layer imports) and pulls numpy 2.x /

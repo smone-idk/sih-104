@@ -282,6 +282,94 @@ session object but have no UI yet (Phase 5).
 
 ---
 
+## Phase 2.5 — fusion band floor ✅
+
+**Problem.** The Phase 2 gate table showed the headline failure mode of PS26104:
+
+| | score | band |
+|---|---|---|
+| XTTS clone of the enrolled CFO | 61.0 | MEDIUM |
+| Piper TTS, unrelated voice | 78.9 | HIGH |
+
+A clone of the target scoring *below* crude off-the-shelf TTS. Root cause is
+structural, not weights: a successful clone is **supposed** to match the enrolled
+profile, so `speaker_consistency` correctly reports low suspicion and correctly
+contributes few points. A weighted linear blend is additive — it has no
+interaction term for "synthetic **AND** matches the target".
+
+**Fix — a named band-floor rule, not reweighting.** `policy/rules.py`:
+`CLONED_VOICE` verdict → band floors at HIGH. The **score is left untouched**;
+only the band is raised, and the rule's reason travels with it into the payload,
+the UI and (later) the incident record. Thresholds and the floor band are
+Settings values (`synthetic_high_threshold`, `speaker_match_threshold`,
+`cloned_voice_band_floor`, `enable_band_floors`), not literals.
+
+Reweighting was rejected: it would distort per-component semantics that are
+individually correct, and being additive it would only reorder these particular
+clips. An interaction-term multiplier was rejected as harder to justify to a
+judge than one sentence of rule.
+
+**Result** — applied in `WindowScorer.aggregate()`, the single point where batch
+and streaming converge, so both paths get it:
+
+| scenario | score | band from score | final band | rule |
+|---|---|---|---|---|
+| genuine control | 5.4 | LOW | **LOW** | — |
+| genuine, other speaker | 36.6 | LOW | **LOW** | — |
+| CEO transfer (clone) | 60.8 | MEDIUM | **HIGH** | `cloned_voice_floor` |
+| Bank OTP (clone) | 59.0 | MEDIUM | **HIGH** | `cloned_voice_floor` |
+| Govt summons (Piper) | 78.8 | HIGH | HIGH | — |
+
+**All 15 XTTS clips** now land HIGH; all 15 Piper clips land HIGH on score alone;
+genuine stays LOW with no floor applied.
+
+Also fixed a real gap this surfaced: speaker similarity landing between the match
+and mismatch thresholds discarded the synthetic signal and reported
+`INDETERMINATE` (two Piper clips did). Such clips now report
+`SYNTHETIC_SUSPECTED`.
+
+66 tests pass, including `test_every_cloned_clip_lands_high` and
+`test_both_cloned_scenarios_land_high_without_context` — the latter asserts the
+context components are absent, so the floor is proven to work *before* Phase 3
+can mask the problem.
+
+---
+
+## Phase 3 — segmentation decision (made before wiring)
+
+Whisper wants utterance-shaped input, which would be a third granularity beside
+batch-whole-clip and stream-per-window.
+
+**Decision: the ASR worker gets utterance segmentation, but NOT its own
+segmenter — it reads utterance spans from the same Silero VAD pass the acoustic
+loop already runs.** Three granularities, two consumers, **one segmentation
+source of truth.**
+
+Why not reuse the 4 s / 1 s-hop window boundaries:
+- They cut mid-word. Whisper hallucinates at truncated boundaries.
+- 75 % overlap means the same words transcribe up to 4×. The context engine
+  would count one "transfer 25 lakh" as four urgency/amount hits.
+- §4 explicitly requires the decoupling: ASR runs "over VAD-segmented
+  utterances (roughly every 3–6 s), not on every hop".
+- §5 requires each context signal to carry its **matched transcript span**.
+  Spans must map to real utterance times, not arbitrary window cuts.
+
+Why not a second, independent segmenter: two VADs disagreeing about where speech
+is would make "the acoustic layer scored this window but the transcript has no
+words there" unexplainable. `vad.analyze()` already returns `segments`; the
+streaming path currently uses only `overall_ratio`.
+
+**Implementation shape.** `StreamSession` keeps a rolling utterance buffer and
+runs the same VAD over the incoming stream (separate from the per-window ratio
+call, because utterances cross window boundaries). When a segment closes and
+exceeds `asr_min_segment_seconds`, or hits `asr_max_segment_seconds`, it is
+queued to an async Whisper worker. The worker emits `transcript` frames at its
+own cadence; the context engine consumes the rolling transcript and calls the
+existing `StreamSession.set_context_components()` hook. Acoustic score keeps
+ticking at 1 Hz throughout — the UI shows both cadences, as §4 requires.
+
+---
+
 ## Phase 2 — original notes
 
 **Gate:** Genuine LibriSpeech clip scores LOW, cloned attack clip scores higher,

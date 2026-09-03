@@ -61,17 +61,23 @@ class ComponentContribution:
 @dataclass
 class FusionResult:
     score: float                 # 0..100
-    band: str                    # LOW | MEDIUM | HIGH
+    band: str                    # LOW | MEDIUM | HIGH (after any band floor)
     components: list[ComponentContribution]
     redistributed: bool
     available_components: list[str]
     unavailable_components: list[str]
+    #: band implied by the score alone, before policy floors were applied
+    band_from_score: str = ""
+    #: named rules that raised the band (policy/rules.py). Empty in the normal case.
+    floors_applied: list = field(default_factory=list)
     disclaimer: str = DISCLAIMER
 
     def as_dict(self) -> dict:
         return {
             "score": round(self.score, 2),
             "band": self.band,
+            "band_from_score": self.band_from_score or self.band,
+            "floors_applied": [f.as_dict() for f in self.floors_applied],
             "redistributed": self.redistributed,
             "available_components": self.available_components,
             "unavailable_components": self.unavailable_components,
@@ -139,6 +145,7 @@ def fuse(inputs: dict[str, ComponentInput],
     return FusionResult(
         score=score,
         band=band_for(score, s),
+        band_from_score=band_for(score, s),
         components=contribs,
         redistributed=bool(redistributed),
         available_components=[n for n in COMPONENTS if n in avail],

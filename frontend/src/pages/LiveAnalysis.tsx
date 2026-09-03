@@ -86,6 +86,7 @@ export default function LiveAnalysis() {
   const bands = session?.bands ?? DEFAULT_BANDS;
   const live = windows.filter((w) => w.ema_score != null).at(-1);
   const shownScore = final ? final.score : live?.ema_score ?? null;
+  const floor = final?.fusion.floors_applied?.[0] ?? null;
   const shownBand = final
     ? final.band
     : shownScore == null
@@ -187,6 +188,7 @@ export default function LiveAnalysis() {
             verdict={final?.voice_verdict}
             bands={bands}
             live={running}
+            floored={floor}
           />
           {final && (
             <dl className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-100 pt-2">

@@ -103,6 +103,13 @@ export interface Finding {
   evidence: Record<string, unknown>;
 }
 
+export interface AppliedFloor {
+  code: string;
+  description: string;
+  from_band: Band;
+  to_band: Band;
+}
+
 export interface Component {
   name: string;
   raw_value: number | null;
@@ -125,6 +132,8 @@ export interface FinalMsg {
   fusion: {
     score: number;
     band: Band;
+    band_from_score: Band;
+    floors_applied: AppliedFloor[];
     redistributed: boolean;
     available_components: string[];
     unavailable_components: string[];

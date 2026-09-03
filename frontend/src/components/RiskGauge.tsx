@@ -11,12 +11,15 @@ export function RiskGauge({
   verdict,
   bands,
   live,
+  floored,
 }: {
   score: number | null;
   band: Band | null;
   verdict?: string;
   bands: { low_max: number; high_min: number };
   live?: boolean;
+  /** set when a policy rule raised the band above what the score implies */
+  floored?: { from_band: string; description: string } | null;
 }) {
   const R = 70;
   const C = Math.PI * R; // semicircle length
@@ -70,6 +73,14 @@ export function RiskGauge({
       {verdict && (
         <p className="mt-2 text-center text-xs font-semibold tracking-wide text-zinc-700">
           {verdict.replace(/_/g, " ")}
+        </p>
+      )}
+      {floored && (
+        <p className="mt-2 rounded border border-red-300 bg-red-50 px-2 py-1.5 text-[10px] leading-snug text-red-900">
+          <span className="font-semibold">
+            Band raised from {floored.from_band} by policy rule.
+          </span>{" "}
+          {floored.description}
         </p>
       )}
     </div>
