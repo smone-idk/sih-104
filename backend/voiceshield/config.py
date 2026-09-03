@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     asr_min_segment_seconds: float = 3.0
     asr_max_segment_seconds: float = 6.0
 
+    #: fp16 for the SSL anti-spoofing backbone on CUDA (halves its VRAM)
+    use_fp16: bool = True
+
     # --- VAD (§Phase 1.5 Task C) — "silero" (trained, default) | "energy" ---
     vad_backend: str = "silero"
     vad_threshold: float = 0.5

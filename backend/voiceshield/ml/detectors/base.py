@@ -50,6 +50,11 @@ class Detector(ABC):
     kind: DetectorKind = "heuristic"
     #: which fusion component this detector feeds (see config.fusion_weights)
     feeds: str = ""
+    #: False => the detector still runs and is displayed with its badge, but
+    #: carries ZERO fusion weight. Used to keep a known-broken layer visible
+    #: and measurable without letting it move the score (see AASIST,
+    #: LIMITATIONS.md §3). Never blend a detector we cannot explain.
+    contributes: bool = True
 
     def __init__(self) -> None:
         self.available: bool = False
@@ -96,13 +101,22 @@ class Detector(ABC):
 
     # --- introspection ----------------------------------------------
     def info(self) -> dict[str, Any]:
+        from ...config import get_settings
+
+        w = get_settings().fusion_weights().get(self.feeds, 0.0) if self.feeds else 0.0
         return {
             "name": self.name,
             "kind": self.kind,
-            "feeds": self.feeds,
+            "feeds": self.feeds if self.contributes else None,
+            "contributes": self.contributes,
+            "fusion_weight": round(w if self.contributes else 0.0, 4),
             "available": self.available,
             "device": self.device,
             "load_error": self.load_error,
+            "model_id": getattr(self, "model_id", ""),
+            "training_data": getattr(self, "training_data", ""),
+            "licence": getattr(self, "licence", ""),
+            "note": getattr(self, "display_note", ""),
         }
 
 

@@ -162,7 +162,7 @@ findings (`speaker_mismatch`, `synthetic_speech`, `cloned_voice`,
 `speaker_match`) plus a `voice_verdict` resolving the 2×2 of
 synthetic × speaker-similarity. Carried on every analysis result for the Phase 2 UI.
 
-**⚠️ Blocker for Phase 2.** Measured end-to-end today:
+**Blocker resolved in Phase 1.5b** (below). Measured end-to-end *before* that fix:
 
 | clip | score | band | verdict |
 |---|---|---|---|
@@ -170,11 +170,64 @@ synthetic × speaker-similarity. Carried on every analysis result for the Phase 
 | Piper synthetic, unrelated voice | 52.4 | MEDIUM | SPEAKER_MISMATCH |
 | genuine, different real speaker | 52.6 | MEDIUM | SPEAKER_MISMATCH |
 
-The cloned attack scores **lowest of the three**, because the clone matches the
-enrolled profile (ECAPA cosine +0.531) and the anti-spoofing layer is blind to
-XTTS (0.379, indistinguishable from genuine 0.324–0.383). Phase 2's gate
-("cloned clip scores higher than genuine, no controls touched") is therefore
-**unreachable with the current detector set** and needs a decision first.
+The cloned attack scored **lowest of the three**, because the clone matches the
+enrolled profile (ECAPA cosine +0.531) and AASIST is blind to XTTS (0.379,
+indistinguishable from genuine 0.324–0.383).
+
+---
+
+## Phase 1.5b — SSL anti-spoofing detector
+
+**Status:** ✅ **all gate items pass.**
+
+**Selected:** `nii-yamagishilab/wav2vec-large-anti-deepfake` (AntiDeepfake,
+arXiv 2506.21090) — wav2vec2-large SSL, 317.4M params, post-trained on
+**18k h fake + 56k h real** multi-corpus speech. CC-BY-NC-SA-4.0 (non-commercial).
+Chosen over higher-download alternatives specifically because its training set is
+documented and is *not* ASVspoof2019 LA; candidates with `audiofolder` / `None
+dataset` cards were rejected on that basis.
+
+**Validated before adoption** (`scripts/validate_antideepfake.py`):
+
+| model | condition | genuine (32) | Piper (15) | XTTS-cloned (15) | AUC Piper | **AUC cloned** |
+|---|---|---|---|---|---|---|
+| **AntiDeepfake** | clean | **0.0003** | 1.0000 | 1.0000 | 1.000 | **1.000** |
+| **AntiDeepfake** | 8 kHz + µ-law | **0.0006** | 0.9999 | 0.9998 | 1.000 | **1.000** |
+| AASIST | clean | 0.3314 | 0.5073 | 0.3502 | 0.675 | **0.554** |
+| AASIST | 8 kHz + µ-law | 0.4963 | 0.9512 | 0.7257 | 0.935 | 0.688 |
+
+- **Polarity:** head emits `<fake, real>`; we read `softmax(logits)[0]`.
+  `FAKE_INDEX = 0` is a named constant, verified on labelled data.
+- **Wrapper control:** the checkpoint is fairseq-named and `fairseq` will not
+  install on Py3.11/torch 2.5, so we remap onto HF `Wav2Vec2Model`, guarded by
+  `load_state_dict(strict=True)` **and** ASVspoof2019 LA dev: bonafide median
+  0.0005 / spoof median 1.0000, **EER 0.00 %, acc 100 %**.
+- **Confound ruled out:** tiers have different native rates (16/22.05/24 kHz).
+  Genuine clips pushed through the Piper and XTTS resample paths stay at
+  **0.00009** — the detector responds to synthesis, not resampling.
+- **Telephony holds:** unlike AASIST, separation does not collapse under µ-law.
+
+**Wired in:** AntiDeepfake carries `voice_authenticity` (0.30). **AASIST stays
+loaded and badged at zero weight** (`Detector.contributes = False`) as a measured
+baseline — never averaged or ensembled. The pipeline reads the scoring map from
+the registry rather than a hardcoded dict, so a zero-weight detector runs and
+reports but cannot reach fusion.
+
+**VRAM measured at startup:** 730 MB allocated / **1512 MB reserved** on an
+8.6 GB card, logged by `DetectorRegistry._log_vram()` with a warning above the
+5 GB ceiling. Whisper `small` (Phase 3) will add ~1 GB. AntiDeepfake warm
+latency **22.3 ms** per 4 s window (fp16, CUDA).
+
+**End-to-end, after the fix:**
+
+| clip | before | after |
+|---|---|---|
+| XTTS clone of the CFO | 38.4 LOW `CONSISTENT` | **60.9 MEDIUM `CLONED_VOICE`** |
+| Piper synthetic | 52.4 MEDIUM `SPEAKER_MISMATCH` | 80.6 HIGH `SYNTHETIC_OTHER` |
+| genuine, other speaker | 52.6 MEDIUM | 36.9 LOW `SPEAKER_MISMATCH` |
+| genuine, enrolled speaker | 15.1 LOW | 5.4 LOW `CONSISTENT` |
+
+47 tests pass; `make grep-honesty` clean.
 
 ---
 

@@ -1,32 +1,31 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-*.egg-info/
-.pytest_cache/
 
-# Node
-node_modules/
-frontend/dist/
-
-# VoiceShield local state
-/models/**
-!/models/.gitkeep
-/data/**
 !/data/.gitkeep
-/demo_assets/**
-!/demo_assets/scripts/**
 !/demo_assets/.gitkeep
+!/demo_assets/scripts/**
+!/models/.gitkeep
+# Node
+# OS
+# Python
+# TS build info
+# VoiceShield local state
+*.db
+*.egg-info/
+*.pyc
 *.sqlite
 *.sqlite3
-*.db
-.env
-
-# OS
 .DS_Store
-
-# TS build info
-frontend/tsconfig.tsbuildinfo
-tools/.venv-tts/
+.env
+.pytest_cache/
+.venv/
+/data/**
+/demo_assets/**
+/models/**
+__pycache__/
+demo_assets/_asvspoof_dev/
 demo_assets/manifest.json
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+models/antideepfake-wav2vec-large/
+node_modules/
+tools/.venv-tts/
+venv/

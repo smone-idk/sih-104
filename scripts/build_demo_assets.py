@@ -94,7 +94,7 @@ def record(m: dict, path: Path, **fields) -> None:
 
 
 # ------------------------------------------------------------------- genuine
-def build_genuine(quick: bool, m: dict) -> None:
+def build_genuine(quick: bool, m: dict, variants: int = 1) -> None:
     out = ASSETS / "genuine"
     out.mkdir(parents=True, exist_ok=True)
     tar = ASSETS / "_cache" / "dev-clean.tar.gz"
@@ -159,7 +159,7 @@ def _piper_voice_files() -> tuple[Path, Path]:
     return onnx, cfg
 
 
-def build_synthetic(quick: bool, m: dict) -> None:
+def build_synthetic(quick: bool, m: dict, variants: int = 1) -> None:
     out = ASSETS / "synthetic"
     out.mkdir(parents=True, exist_ok=True)
     try:
@@ -177,23 +177,25 @@ def build_synthetic(quick: bool, m: dict) -> None:
 
     scripts = sorted(SCRIPTS.glob("*_en.txt"))[: (2 if quick else None)]
     for sp in scripts:
-        text = _clean_script(sp)
-        dest = out / f"synthetic_{sp.stem}.wav"
-        with wave.open(str(dest), "wb") as wf:
-            voice.synthesize_wav(text, wf, syn_config=syn)
-        record(m, dest, tier="synthetic", language="en",
-               source=f"Piper TTS voice {PIPER_VOICE}", licence="MIT",
-               speaker_id=PIPER_VOICE, upstream_path=str(sp.relative_to(ASSETS)),
-               model=f"piper/{PIPER_VOICE}",
-               params={"length_scale": 1.0, "noise_scale": 0.667,
-                       "noise_w_scale": 0.8},
-               note="unrelated speaker — expect high synthetic prob, LOW speaker sim")
-        print(f"  [ok] {dest.name}")
+        for i, text in enumerate(_script_chunks(sp, variants)):
+            suffix = "" if variants <= 1 else f"_p{i + 1}"
+            dest = out / f"synthetic_{sp.stem}{suffix}.wav"
+            with wave.open(str(dest), "wb") as wf:
+                voice.synthesize_wav(text, wf, syn_config=syn)
+            record(m, dest, tier="synthetic", language="en",
+                   source=f"Piper TTS voice {PIPER_VOICE}", licence="MIT",
+                   speaker_id=PIPER_VOICE,
+                   upstream_path=f"{sp.relative_to(ASSETS)}#chunk{i + 1}/{variants}",
+                   model=f"piper/{PIPER_VOICE}",
+                   params={"length_scale": 1.0, "noise_scale": 0.667,
+                           "noise_w_scale": 0.8},
+                   note="unrelated speaker — expect high synthetic prob, LOW speaker sim")
+            print(f"  [ok] {dest.name}")
     print(f"[ok] synthetic -> {out}")
 
 
 # -------------------------------------------------------------------- cloned
-def build_cloned(quick: bool, m: dict) -> None:
+def build_cloned(quick: bool, m: dict, variants: int = 1) -> None:
     out = ASSETS / "cloned"
     out.mkdir(parents=True, exist_ok=True)
     refs = sorted((ASSETS / "genuine").glob("enrolled_*.wav"))[:3]
@@ -215,21 +217,22 @@ def build_cloned(quick: bool, m: dict) -> None:
 
     scripts = sorted(SCRIPTS.glob("*_en.txt"))[: (2 if quick else None)]
     for sp in scripts:
-        text = _clean_script(sp)
-        dest = out / f"cloned_{sp.stem}.wav"
-        tts.tts_to_file(text=text, speaker_wav=[str(r) for r in refs],
-                        language="en", file_path=str(dest))
-        record(m, dest, tier="cloned", language="en",
-               source="Coqui XTTS-v2 voice clone of LibriSpeech spk 1272",
-               licence="Coqui Public Model License (non-commercial)",
-               speaker_id="1272 (cloned)",
-               upstream_path=str(sp.relative_to(ASSETS)),
-               model=XTTS_MODEL,
-               params={"language": "en", "device": dev,
-                       "speaker_wav": [r.name for r in refs]},
-               note="clone of the enrolled speaker — expect high synthetic prob "
-                    "AND high speaker sim (the key demo case)")
-        print(f"  [ok] {dest.name}")
+        for i, text in enumerate(_script_chunks(sp, variants)):
+            suffix = "" if variants <= 1 else f"_p{i + 1}"
+            dest = out / f"cloned_{sp.stem}{suffix}.wav"
+            tts.tts_to_file(text=text, speaker_wav=[str(r) for r in refs],
+                            language="en", file_path=str(dest))
+            record(m, dest, tier="cloned", language="en",
+                   source="Coqui XTTS-v2 voice clone of LibriSpeech spk 1272",
+                   licence="Coqui Public Model License (non-commercial)",
+                   speaker_id="1272 (cloned)",
+                   upstream_path=f"{sp.relative_to(ASSETS)}#chunk{i + 1}/{variants}",
+                   model=XTTS_MODEL,
+                   params={"language": "en", "device": dev,
+                           "speaker_wav": [r.name for r in refs]},
+                   note="clone of the enrolled speaker — expect high synthetic prob "
+                        "AND high speaker sim (the key demo case)")
+            print(f"  [ok] {dest.name}")
     print(f"[ok] cloned -> {out}")
     print("     Key demo tier: HIGH synthetic prob AND HIGH speaker similarity.")
 
@@ -239,6 +242,31 @@ def _clean_script(path: Path) -> str:
         ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
         if ln.strip() and not ln.startswith("#")
     )
+
+
+def _script_chunks(path: Path, n: int) -> list[str]:
+    """Split a script into n roughly equal chunks on sentence boundaries.
+
+    Used to reach the >=10 clips per attack tier that the detector validation
+    needs, without inventing new scenarios: same scripts, more audio.
+    """
+    text = _clean_script(path)
+    if n <= 1:
+        return [text]
+    import re
+
+    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    if len(sents) < n:
+        return [text]
+    per = len(sents) / n
+    chunks, i = [], 0.0
+    for k in range(n):
+        j = len(sents) if k == n - 1 else int(round((k + 1) * per))
+        chunk = " ".join(sents[int(round(i)):j])
+        if chunk:
+            chunks.append(chunk)
+        i = j
+    return chunks or [text]
 
 
 # --------------------------------------------------------------- provenance
@@ -256,7 +284,19 @@ built entirely from public datasets and open TTS models.
 | genuine (Hindi) | Mozilla Common Voice — Hindi | CC0 1.0 | fetched manually (click-through) into `demo_assets/genuine/` as `hi_*.wav` |
 | synthetic (non-cloned) | Piper TTS `en_US-lessac-medium` | MIT | unrelated speaker reading the scam scripts |
 | cloned | Coqui XTTS-v2 | Coqui Public Model License — **non-commercial** | clones the enrolled speaker; prototype-only, see LIMITATIONS.md §5 |
-| ASVspoof LA (optional) | ASVspoof 2019 LA | ASVspoof EULA | eval set only, if downloadable at the venue |
+| ASVspoof LA (control) | ASVspoof 2019 LA dev, via `Nemez1z/asvspoof-2019-la` mirror | ASVspoof EULA | 80-clip balanced subset in `demo_assets/_asvspoof_dev/`; used as the detector wrapper-correctness control (LIMITATIONS.md §3) |
+
+## Model licences
+
+| Model | Role | Licence |
+|---|---|---|
+| `nii-yamagishilab/wav2vec-large-anti-deepfake` | **primary** anti-spoofing (weight 0.30) | **CC-BY-NC-SA-4.0 — non-commercial** |
+| `clovaai` AASIST | anti-spoofing baseline (weight 0.00) | MIT |
+| `speechbrain/spkrec-ecapa-voxceleb` | speaker verification | Apache-2.0 |
+| `silero-vad` | voice activity detection | MIT |
+| `faster-whisper small` | ASR (Phase 3) | MIT |
+| Piper `en_US-lessac-medium` | demo asset generation | MIT |
+| Coqui XTTS-v2 | demo asset generation | Coqui CPML — non-commercial |
 
 ## Scam scripts
 
@@ -273,7 +313,20 @@ intent. They exist as text so they can be regenerated in any voice or language.
 """
 
 
+def prune_manifest(m: dict) -> int:
+    """Drop entries whose file no longer exists, so PROVENANCE never lists a
+    clip that is not in the corpus."""
+    gone = [rel for rel in m.get("clips", {}) if not (ASSETS / rel).exists()]
+    for rel in gone:
+        del m["clips"][rel]
+    if gone:
+        print(f"[ok] pruned {len(gone)} manifest entries for deleted clips")
+    return len(gone)
+
+
 def write_provenance(m: dict) -> None:
+    prune_manifest(m)
+    save_manifest(m)
     clips = m.get("clips", {})
     lines = [PROV_HEADER, "\n## Generated clips\n"]
     if not clips:
@@ -306,6 +359,9 @@ def main() -> int:
     ap.add_argument("--tier", choices=["genuine", "synthetic", "cloned"])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--variants", type=int, default=1,
+                    help="split each script into N chunks -> N clips per script "
+                         "(used to reach >=10 clips per attack tier)")
     ap.add_argument("--provenance", action="store_true",
                     help="regenerate PROVENANCE.md from the manifest and exit")
     args = ap.parse_args()
@@ -325,7 +381,7 @@ def main() -> int:
     for tier in tiers:
         print(f"\n=== build tier: {tier} ===")
         {"genuine": build_genuine, "synthetic": build_synthetic,
-         "cloned": build_cloned}[tier](args.quick, m)
+         "cloned": build_cloned}[tier](args.quick, m, args.variants)
         save_manifest(m)
 
     write_provenance(m)

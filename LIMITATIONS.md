@@ -92,13 +92,70 @@ It is the reference for what VoiceShield v1 does and does not claim.
 > The DSP `HEURISTIC` fallback does not rescue this: on the same sets it scores
 > genuine 0.025 vs Piper 0.002 — it separates in the *wrong direction*.
 >
-> **Consequence for the product story:** on this corpus the voice-clone claim
-> cannot rest on the anti-spoofing layer. What does work today is speaker
-> verification (ECAPA) plus, from Phase 3, the transcript-derived context
-> engine. Closing the synthetic-detection gap requires swapping in an
-> SSL-based anti-spoofing model trained on ASVspoof2021-DF / In-the-Wild — a
-> one-line `DetectorRegistry` change by design, and the top item on the
-> production roadmap.
+> **This gap has since been closed** by adding an SSL detector — see the
+> side-by-side below. AASIST remains loaded and badged at **zero fusion
+> weight** as a measured baseline.
+
+### The fix, and the side-by-side that makes the point
+
+The registry now runs **two** anti-spoofing detectors. Only the first carries
+weight.
+
+| | **AntiDeepfake** (primary) | **AASIST** (baseline) |
+|---|---|---|
+| model | `nii-yamagishilab/wav2vec-large-anti-deepfake` | `clovaai/aasist` AASIST.pth |
+| architecture | wav2vec2-large SSL, 317.4M params + 2-way head | graph-attention, ~300k params |
+| **training data** | **18k h fake + 56k h real, multi-corpus** post-training (arXiv [2506.21090](https://arxiv.org/abs/2506.21090)) | **ASVspoof2019 LA only** (19 attacks, 2019-era vocoders) |
+| licence | CC-BY-NC-SA-4.0 (non-commercial) | MIT |
+| fusion weight | **0.30** (`voice_authenticity`) | **0.00** — displayed, never fused |
+| badge | `PRETRAINED` | `PRETRAINED` |
+
+**Measured on our own corpus** (mean spoof-probability per clip, aggregated over
+speech windows exactly as the pipeline does). AUC is `P(attack clip scores above
+a genuine clip)` — threshold-free, so it cannot be tuned into looking good:
+
+| model | condition | genuine (n=32) | Piper (n=15) | XTTS-cloned (n=15) | AUC vs Piper | **AUC vs cloned** |
+|---|---|---|---|---|---|---|
+| **AntiDeepfake** | clean | **0.0003** | **1.0000** | **1.0000** | **1.000** | **1.000** |
+| **AntiDeepfake** | 8 kHz + µ-law | **0.0006** | 0.9999 | 0.9998 | **1.000** | **1.000** |
+| AASIST | clean | 0.3314 | 0.5073 | 0.3502 | 0.675 | **0.554** |
+| AASIST | 8 kHz + µ-law | 0.4963 | 0.9512 | 0.7257 | 0.935 | 0.688 |
+
+AASIST's AUC of **0.554** against XTTS clones is a coin flip. Its apparently
+better telephony numbers are an artefact: µ-law inflates *everything*, genuine
+included (0.33 → 0.50), so the ranking improves without the detector gaining any
+real ability.
+
+**The finding, in one line:** a 2019-trained anti-spoofing model is blind to
+2023 voice cloning (AUC 0.554), while the same task is solved by an SSL model
+post-trained on modern multi-corpus data (AUC 1.000) — and the gap is in the
+*training data*, not the architecture or our wrapper.
+
+#### Why we believe the new numbers
+
+The new model got no benefit of the doubt; it passed the same diagnosis AASIST
+failed, plus a confound check:
+
+1. **Polarity stated explicitly.** The head emits `<fake, real>`; we read
+   `softmax(logits)[0]` as spoof-probability. `FAKE_INDEX = 0` is a named
+   constant in the detector, not an implicit assumption.
+2. **Wrapper control on labelled home turf.** The checkpoint ships fairseq-style
+   parameter names and its recipe needs `fairseq`, which will not install on
+   Python 3.11 / torch 2.5 — so we remap onto HF's `Wav2Vec2Model`. A silent
+   mis-map would have produced a confident but meaningless detector. Guards:
+   `load_state_dict(strict=True)` (any missing/unexpected key makes the detector
+   report unavailable rather than score), and scoring the remapped model on the
+   80 labelled ASVspoof2019 LA dev clips: **bonafide median 0.0005, spoof median
+   1.0000, EER 0.00 %, accuracy 100 %.**
+3. **Sample-rate confound ruled out.** Our tiers have different native rates
+   (genuine 16 kHz, Piper 22.05 kHz, XTTS 24 kHz), so the detector could have
+   been keying on resampling artefacts rather than synthesis. Pushing *genuine*
+   clips through the exact Piper and XTTS resample paths leaves them at
+   **0.00009** (vs 0.00012 as-is) — no effect. It is responding to synthesis.
+
+Reproduce with `python scripts/validate_antideepfake.py`; results are written to
+`data/eval/detector_validation.json` and are what the Phase 6 Evaluation page
+reads.
 - **ECAPA-TDNN** trained on VoxCeleb (English, mostly celebrity interview
   audio). Accent and channel mismatch with Indian telephony speech will move
   the operating point; not compensated for in v1.
@@ -202,13 +259,38 @@ _(updated at the end of each build phase)_
     (0.65 → 0.96 on one genuine clip) — the narrowband generalization gap. This
     is surfaced in the §8 before/after view, not corrected for.
 - **Phase 1.5:**
-  - **The anti-spoofing layer does not work on this corpus.** Diagnosed to a
-    measured domain gap, not a bug (§3). Left as-is and badged, per the
-    diagnosis. The practical consequence is that a cloned clip does **not**
-    currently score higher than a genuine one on the synthetic axis — it scores
-    *lower* than a different-speaker genuine clip, because the clone matches the
-    enrolled profile. This blocks the Phase 2 gate as originally written and
-    needs a decision before Phase 2 starts.
+  - **The AASIST anti-spoofing layer does not work on this corpus.** Diagnosed
+    to a measured domain gap, not a bug (§3). Resolved in Phase 1.5b by adding
+    the AntiDeepfake SSL detector; AASIST stays loaded at zero fusion weight.
+- **Phase 1.5b:**
+  - **AntiDeepfake is licensed CC-BY-NC-SA-4.0 — non-commercial.** Same posture
+    as XTTS-v2: fine for a prototype, blocking for a shipped product. A
+    commercial deployment needs either a licence from NII or an equivalently
+    trained model. This is now the licence constraint on the *core* detector,
+    not just on demo asset generation.
+  - **The remap is ours, not upstream's.** We convert fairseq-style parameter
+    names onto HF `Wav2Vec2Model` because `fairseq` will not install on
+    Python 3.11 / torch 2.5. It is guarded by `strict=True` plus the ASVspoof
+    control (§3), but it is still a reimplementation of someone else's loading
+    path and should be re-verified if the checkpoint is ever updated.
+  - **Perfect scores deserve suspicion.** AntiDeepfake returns ~0.0000 on
+    genuine and ~1.0000 on both attack tiers. We ruled out the sample-rate
+    confound (§3), but a corpus of 32 genuine / 30 attack clips from *two*
+    generators is small and homogeneous. These are not generalization claims —
+    they say this model separates *these* attacks, which AASIST could not.
+  - **A cloned clip currently scores lower than a Piper clip** (60.9 vs 80.6)
+    because the clone matches the enrolled speaker, so `speaker_consistency`
+    contributes ~0 while Piper's mismatch adds points. Component-wise that is
+    correct, and the `CLONED_VOICE` verdict plus the `cloned_voice` finding make
+    the distinction explicit rather than hiding it in one number. We have
+    deliberately **not** retuned fusion weights to reorder them; the context
+    engine (Phase 3) is the layer that should lift a fraud-script clone.
+  - **VRAM measured at 1.5 GB reserved** with AntiDeepfake (fp16) + AASIST +
+    ECAPA loaded. Whisper `small` is not loaded until Phase 3 and will add
+    roughly 1 GB; the 5 GB ceiling still holds but must be re-measured then.
+  - The corpus grew to 15 Piper + 15 XTTS clips by splitting each of the 5 scam
+    scripts into 3 chunks — **same 5 scenarios, more audio**, not 30 independent
+    scenarios. Clip counts overstate scenario diversity.
   - **TTS toolchain is a second, isolated venv** (`tools/.venv-tts`).
     `coqui-tts` requires `transformers>=4.57,<5` (5.x removed
     `isin_mps_friendly`, which XTTS's GPT layer imports) and pulls numpy 2.x /

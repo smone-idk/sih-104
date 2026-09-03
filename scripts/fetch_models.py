@@ -123,6 +123,35 @@ def fetch_aasist(check: bool) -> bool:
     return ok or all_ok  # non-fatal: heuristic fallback exists
 
 
+def fetch_antideepfake(check: bool) -> bool:
+    """AntiDeepfake wav2vec2-large — the PRIMARY anti-spoofing layer.
+
+    nii-yamagishilab/wav2vec-large-anti-deepfake (arXiv 2506.21090), post-trained
+    on 18k h fake + 56k h real multi-corpus speech. CC-BY-NC-SA-4.0.
+    """
+    target = MODELS / "antideepfake-wav2vec-large"
+    weights = target / "model.safetensors"
+    cfg = target / "config.json"
+    if weights.exists() and cfg.exists():
+        print(f"[ok] AntiDeepfake cached at {target}")
+        return True
+    if check:
+        print(f"[MISSING] AntiDeepfake at {target} — "
+              "voice_authenticity falls back to the DSP heuristic")
+        return False
+    print("Fetching AntiDeepfake wav2vec2-large (~1.2 GB, CC-BY-NC-SA-4.0) ...")
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download("nii-yamagishilab/wav2vec-large-anti-deepfake",
+                          local_dir=str(target))
+        print(f"[ok] AntiDeepfake -> {target}")
+        return True
+    except Exception as exc:
+        print(f"[warn] could not fetch AntiDeepfake: {exc}")
+        return False
+
+
 def check_silero() -> bool:
     """Silero VAD weights ship inside the `silero-vad` wheel — nothing to fetch,
     but verify they are importable so offline startup cannot surprise us."""
@@ -157,7 +186,8 @@ def main() -> int:
     results = {
         "ECAPA-TDNN (speaker, Tier A)": fetch_ecapa(args.check),
         "faster-whisper (ASR, Tier A)": fetch_whisper(args.check),
-        "AASIST (anti-spoofing, Tier B — heuristic fallback OK)": fetch_aasist(args.check),
+        "AntiDeepfake wav2vec2-large (anti-spoofing PRIMARY)": fetch_antideepfake(args.check),
+        "AASIST (anti-spoofing baseline, zero fusion weight)": fetch_aasist(args.check),
         "Silero VAD (bundled in the wheel)": check_silero(),
     }
     print("\n=== summary ===")

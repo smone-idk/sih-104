@@ -27,12 +27,16 @@ from .ingest.telephony import TelephonyConfig, degrade
 from .ingest import vad as vad_mod
 from .ml.registry import get_registry
 
-# detector name -> fusion component it feeds
-_DETECTOR_COMPONENT = {
-    "synthetic_speech": "voice_authenticity",
-    "speaker_consistency": "speaker_consistency",
-    "prosody_anomaly": "prosody_anomaly",
-}
+
+def _scoring_map() -> dict[str, str]:
+    """detector name -> fusion component, for detectors that carry weight.
+
+    Read from the registry rather than hardcoded, so a zero-weight detector
+    (AASIST, kept as a measured baseline) still runs and is reported but never
+    reaches fusion. See DetectorRegistry.build and base.Detector.contributes.
+    """
+    return {d.name: d.feeds for d in get_registry().all()
+            if d.feeds and d.contributes}
 
 
 @dataclass
@@ -62,6 +66,8 @@ class AnalysisResult:
     windows: list[WindowScore]
     detector_means: dict[str, float | None]
     latency_ms: dict[str, float]
+    #: detectors that ran but carry ZERO fusion weight (measured baselines)
+    baseline_detectors: dict[str, float] = field(default_factory=dict)
     findings: list[Finding] = field(default_factory=list)
     voice_verdict: str = "INDETERMINATE"
     vad_backend: str = ""
@@ -88,6 +94,8 @@ class AnalysisResult:
                 k: (None if v is None else round(v, 4))
                 for k, v in self.detector_means.items()
             },
+            "baseline_detectors": {k: round(v, 4)
+                                   for k, v in self.baseline_detectors.items()},
             "latency_ms": {k: round(v, 2) for k, v in self.latency_ms.items()},
             "context": self.context,
             "warnings": self.warnings,
@@ -160,8 +168,11 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
         warnings.append(f"VAD fell back to the energy gate: {vad.fallback_reason}")
 
     # per-detector accumulation over speech windows
-    acc: dict[str, list[float]] = {n: [] for n in _DETECTOR_COMPONENT}
-    det_latency: dict[str, list[float]] = {n: [] for n in _DETECTOR_COMPONENT}
+    scoring = _scoring_map()
+    acc: dict[str, list[float]] = {n: [] for n in scoring}
+    det_latency: dict[str, list[float]] = {n: [] for n in scoring}
+    # detectors that run and are reported but carry zero fusion weight
+    baseline_means: dict[str, list[float]] = {}
     ema = EMA(s.ema_alpha)
     windows: list[WindowScore] = []
     n_speech = 0
@@ -179,12 +190,15 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
 
         comp_inputs: dict[str, ComponentInput] = {}
         for det in reg.available():
-            comp = _DETECTOR_COMPONENT.get(det.name)
-            if comp is None:
-                continue
             res = det.analyze(win.samples, sr, ctx)
             ws.detectors[det.name] = res.as_dict()
             ws.latency_ms[det.name] = res.latency_ms
+            comp = scoring.get(det.name)
+            if comp is None:
+                # zero-weight baseline detector: record it, never fuse it
+                if res.available and res.score is not None:
+                    baseline_means.setdefault(det.name, []).append(res.score)
+                continue
             det_latency[det.name].append(res.latency_ms)
             if res.available and res.score is not None:
                 acc[det.name].append(res.score)
@@ -204,7 +218,7 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
     # aggregate: mean of each detector over speech windows -> single fusion
     detector_means: dict[str, float | None] = {}
     agg_inputs: dict[str, ComponentInput] = {}
-    for name, comp in _DETECTOR_COMPONENT.items():
+    for name, comp in scoring.items():
         vals = acc[name]
         det = reg.get(name)
         if vals:
@@ -254,6 +268,7 @@ def analyze_audio(audio: np.ndarray, sr: int, *,
         windows=windows,
         detector_means=detector_means,
         latency_ms=lat,
+        baseline_detectors={k: float(np.mean(v)) for k, v in baseline_means.items() if v},
         findings=findings,
         voice_verdict=verdict,
         vad_backend=vad.backend,
