@@ -5,6 +5,8 @@ import { KindBadge } from "./components/common";
 import LiveAnalysis from "./pages/LiveAnalysis";
 import Approvals from "./pages/Approvals";
 import Incidents from "./pages/Incidents";
+import Profiles from "./pages/Profiles";
+import Upload from "./pages/Upload";
 
 function SystemPage() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -70,8 +72,10 @@ function SystemPage() {
 
 const NAV = [
   { to: "/live", label: "Live Analysis" },
+  { to: "/upload", label: "Upload" },
   { to: "/approvals", label: "Approvals" },
   { to: "/incidents", label: "Incidents" },
+  { to: "/profiles", label: "Voice Profiles" },
   { to: "/system", label: "System" },
 ];
 
@@ -111,6 +115,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/live" replace />} />
           <Route path="/live" element={<LiveAnalysis />} />
+          <Route path="/upload" element={<Upload />} />
+          <Route path="/profiles" element={<Profiles />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/system" element={<SystemPage />} />

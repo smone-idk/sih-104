@@ -526,6 +526,22 @@ _(updated at the end of each build phase)_
   - **`Reset demo` exists and is labelled.** It returns an approval to pending
     and clears its session, which makes the policy fail closed rather than open.
     It is still a state-changing endpoint with no auth (see above).
+- **Phase 5 (profiles, upload, push-to-record):**
+  - **A voice embedding is still biometric data.** Deleting a profile removes
+    the row, but under DPDP-2023 thinking the harder problem is that a voice
+    template cannot be reissued like a password — see the Privacy Center. We
+    store the embedding and not the audio, which reduces but does not remove
+    that exposure.
+  - **Enrolment quality is not checked.** Any clip over 1 s is accepted; there
+    is no SNR floor, duration guidance, or channel-match check, so a poor
+    enrolment silently produces a weak profile.
+  - **Recording format depends on the browser.** `MediaRecorder` emits WebM/Opus
+    on Chromium; decoding is handled by PyAV, but a browser emitting an exotic
+    codec would fail at decode rather than at record time.
+  - **Push-to-record has no server-side proof of consent.** The guarantees
+    (explicit press, visible indicator, release on navigation) are client-side
+    properties of one component. A modified client could behave differently;
+    what the server sees is an uploaded clip either way.
 - **Corpus, as built (v1):**
 
   | tier | clips | total | min / median / max | native sr |

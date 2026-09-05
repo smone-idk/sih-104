@@ -456,6 +456,54 @@ disabled, forged bypass → HTTP 403 shown in-page, no JS errors).
 
 ---
 
+## Phase 5 — Voice profiles, upload, push-to-record, telephony toggle ✅
+
+**Gate:** removing an enrolled profile visibly disables the speaker layer and
+redistributes its weight — **PASSED**, verified in a browser:
+
+```
+WITH profile   : Speaker consistency  0.000  wt 0.20  eff 0.286   0.00 pts
+WITHOUT profile: Speaker consistency  "layer unavailable — no enrolled
+                 profile"      —      wt 0.20  eff 0.000   0.00 pts
+```
+
+Effective weight goes to zero, the raw value is `null` rather than substituted,
+the remaining layers' effective weights rise above nominal, and they still sum
+to 1.0. The Voice Profiles page shows a banner explaining exactly this.
+
+**Push-to-record — built to the Privacy Center's claims, not around them.**
+`getUserMedia` has **exactly one call site in the whole frontend**, inside the
+press handler (`grep -rn getUserMedia frontend/src` confirms it). Verified in a
+browser with **no microphone permission granted**, instrumenting `getUserMedia`
+from an init script and visiting every page:
+
+```
+getUserMedia calls per page (must all be 0):
+  /live: 0  /upload: 0  /profiles: 0  /approvals: 0  /incidents: 0  /system: 0
+RECORDING indicator before press: 0
+```
+
+Tracks are stopped on stop, on unmount, and on `pagehide`, so navigating away
+releases the mic. While recording, a pulsing red dot, the word RECORDING and an
+elapsed timer are shown (`role="status"`, `aria-live="assertive"`). Nothing is
+uploaded until the user presses Analyse.
+
+**Also built:** enrolment from upload or recording (embeddings averaged,
+L2-normalised); `POST /api/v1/analyze` for upload/recorded clips running the same
+pipeline; and the §8 telephony comparison — the clip analysed twice, clean and
+through the 8 kHz + µ-law chain, shown **side by side with the delta**, plus an
+optional noise slider.
+
+**Privacy claims pinned as tests, not promises:**
+- `test_no_audio_file_is_left_behind` — no `voiceshield-*` temp dir survives a request.
+- `test_db_holds_no_audio_columns` — walks the whole schema; asserts exactly one
+  BLOB column exists in the entire database, `voice_profiles.embedding`.
+- `test_listing_never_exposes_the_embedding`, `test_retain_audio_defaults_to_false`.
+
+152 tests pass; `make grep-honesty` clean; no JS errors.
+
+---
+
 ## Phase 3 — segmentation decision (made before wiring)
 
 Whisper wants utterance-shaped input, which would be a third granularity beside

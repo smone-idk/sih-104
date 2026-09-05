@@ -371,3 +371,73 @@ export async function getIncidents(band?: string): Promise<{ incidents: Incident
   const q = band ? `?band=${band}` : "";
   return (await fetch(`${base}/incidents${q}`)).json();
 }
+
+// ---------------------------------------------------------------- Phase 5
+export interface VoiceProfile {
+  id: string;
+  display_name: string;
+  role: string;
+  embedding_dim: number;
+  n_enroll_clips: number;
+  created_at: string;
+  source_note: string;
+}
+
+export async function getProfiles(): Promise<{ profiles: VoiceProfile[]; note: string }> {
+  return (await fetch(`${base}/profiles`)).json();
+}
+
+export async function enrolProfile(name: string, role: string, files: File[]) {
+  const fd = new FormData();
+  fd.append("display_name", name);
+  fd.append("role", role);
+  files.forEach((f) => fd.append("audio", f));
+  const r = await fetch(`${base}/profiles`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function deleteProfile(id: string) {
+  const r = await fetch(`${base}/profiles/${id}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export interface AnalyzeResult {
+  score: number;
+  band: Band;
+  voice_verdict: string;
+  findings: Finding[];
+  fusion: FinalMsg["fusion"];
+  transcript: TranscriptData;
+  context_quotes: ContextQuote[];
+  context: ContextData | null;
+  detector_means: Record<string, number | null>;
+  latency_ms: Record<string, number>;
+  duration_s: number;
+  n_windows: number;
+  n_speech_windows: number;
+  warnings: string[];
+  windows: WindowMsg[];
+}
+
+export async function analyzeUpload(
+  file: File,
+  opts: { useProfile?: boolean; compareTelephony?: boolean; snrDb?: number | null } = {},
+): Promise<{
+  clean: AnalyzeResult;
+  telephony?: AnalyzeResult;
+  delta?: number;
+  telephony_config?: Record<string, unknown>;
+  filename: string;
+  privacy_note: string;
+}> {
+  const fd = new FormData();
+  fd.append("audio", file);
+  fd.append("use_profile", String(opts.useProfile ?? true));
+  fd.append("compare_telephony", String(opts.compareTelephony ?? false));
+  if (opts.snrDb != null) fd.append("snr_db", String(opts.snrDb));
+  const r = await fetch(`${base}/analyze`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+  return r.json();
+}

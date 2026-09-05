@@ -18,6 +18,7 @@ from ..inventory import build_report, print_inventory
 from ..ml.registry import get_registry
 from ..store.db import init_db, table_summary
 from .routes import approvals as approval_routes
+from .routes import profiles as profile_routes
 from .routes import stream as stream_routes
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -28,6 +29,7 @@ app = FastAPI(title="VoiceShield", version=__version__,
 
 app.include_router(stream_routes.router)
 app.include_router(approval_routes.router)
+app.include_router(profile_routes.router)
 
 app.add_middleware(
     CORSMiddleware,
