@@ -25,8 +25,11 @@ in the UI with a `HEURISTIC` badge.
 |---|---|
 | Speaker consistency (ECAPA-TDNN, cosine vs enrolled profile) | **real** — pretrained model |
 | Prosody anomaly (F0/jitter/shimmer/rate/pauses/flatness vs human baseline) | **real DSP**, badged `HEURISTIC` |
-| Transcript (faster-whisper `small`) | **weights cached, not wired yet** (Phase 3) |
-| Context signals (urgency/secrecy/authority/amount/out-of-workflow/PII) | **not wired yet** (Phase 3) — reports unavailable, weight is redistributed |
+| Transcript (faster-whisper `small`) | **real** — pretrained ASR over VAD-segmented utterances; measured WER 4.5% genuine / 23.4% on XTTS clones (`LIMITATIONS.md`) |
+| Context signals (urgency/secrecy/authority/amount/out-of-workflow/PII) | **real** — regex/rules over the transcript, badged `HEURISTIC`; every flag carries its quote + timestamp |
+| Approval block (403 while HIGH) | **real control** — derived from server-side session state only; a forged client payload cannot unlock it |
+| Challenge–response verification | **real** — CSPRNG phrase, response audio re-analysed through the same pipeline |
+| Callback / MFA / supervisor verification | **simulated** state machine, badged `SIMULATED` |
 | Latency | **real** — measured per stage, displayed |
 | Synthetic-speech detection (**AntiDeepfake** wav2vec2-large, 74k h multi-corpus) | **real** — pretrained, carries the `voice_authenticity` weight |
 | Synthetic-speech baseline (AASIST, ASVspoof2019-LA) | **real but zero fusion weight** — kept, badged, and measured; it fails on modern TTS (`LIMITATIONS.md` §3) |
@@ -113,6 +116,19 @@ Pick a scenario, press **Start simulation**. The clip is streamed through
 `WS /api/v1/stream` in 1 s hops and scored by the same `WindowScorer` the CLI
 uses. `GET /api/v1/scenarios` lists what is bundled.
 
+### The approval gate (Phase 4)
+
+```bash
+# stream a cloned call, then try to approve the ₹25,00,000 transfer
+curl -X POST localhost:8000/api/v1/approvals/$AID/approve -d '{}'
+#   HTTP 403  {"error":"verification_required","band":"HIGH","action":"ESCALATE"}
+
+# the same request with a forged low-risk payload — still 403
+curl -X POST localhost:8000/api/v1/approvals/$AID/approve \
+     -d '{"band":"LOW","verified":true,"override":true}'
+#   HTTP 403  band reported back is HIGH — the server never read those fields
+```
+
 Health: `curl localhost:8000/api/v1/health`
 Inventory: `curl localhost:8000/api/v1/inventory`
 
@@ -170,7 +186,7 @@ Built in strict order; a phase does not start until the previous gate passes
 | 0 ✅ | Scaffold, fetch_models, build_demo_assets, SQLite schema, startup inventory | Boots offline; prints accurate detector list with device |
 | 1 ✅ | Batch pipeline as a CLI (`python analyze.py clip.wav` → JSON) | Two clips → two different explainable scores; detector tests pass |
 | 2 ✅ | WebSocket streaming + Live Analysis screen | Genuine clip LOW, cloned clip higher, no controls touched |
-| 3 | Whisper worker + context engine + explainability | Every context flag traces to a transcript quote |
+| 3 ✅ | Whisper worker + context engine + explainability | Every context flag traces to a transcript quote |
 | 4 ✅ | Policy engine, mock approval blocked at API, challenge-response, incident log | `curl POST /approve` → 403 while risk HIGH |
 | 5 | Voice profiles, upload UI, push-to-record, telephony toggle | Removing a profile disables speaker layer, redistributes weight |
 | 6 | Eval harness + page, Privacy Center, API page, architecture, docs | §16 checklist clean |
