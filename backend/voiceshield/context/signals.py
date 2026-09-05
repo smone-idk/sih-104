@@ -193,8 +193,21 @@ CREDENTIAL = [
     ("national_id", r"\b(aadhaar|aadhar|pan (?:card|number)|passport number|voter id)\b"),
 ]
 
+# Government / law-enforcement impersonation coercion. This family was added
+# after measuring that the govt-summons scenario fired almost nothing: none of
+# summons, penalty, case number, warrant, arrest, notice, legal action, court,
+# fine, investigation, FIR or police matched ANY pattern in the other lexicons.
+THREAT_COERCION = [
+    ("legal_process", r"\b(summons|summoned|non.?bailable|warrant|f\.?i\.?r\.?|first information report|charge ?sheet|court (?:order|notice|case)|legal (?:action|proceedings|notice)|case (?:number|has been registered|registered against)|lookout notice)\b"),
+    ("arrest_threat", r"\b(arrest(?:ed|ing)?|taken into custody|detained|remand|to avoid arrest|jail|imprisonment)\b"),
+    ("penalty_threat", r"\b(penalt(?:y|ies)|fine of|late fee|seiz(?:e|ed|ure)|freeze (?:your )?account|account (?:will be )?(?:blocked|frozen|suspended)|licence (?:will be )?(?:cancelled|revoked)|disconnect(?:ed)? within)\b"),
+    ("agency_process", r"\b(compliance call|money laundering|narcotics|customs (?:department|clearance)|income tax (?:notice|department)|cyber ?crime (?:cell|department)|enforcement directorate|investigation (?:against|into) you)\b"),
+    ("stay_on_line", r"\b(stay on the line|do not hang up|don'?t hang up|remain on the call|do not disconnect)\b"),
+]
+
 LEXICONS = {
     "urgency": URGENCY,
+    "threat_coercion": THREAT_COERCION,
     "secrecy": SECRECY,
     "authority_claim": AUTHORITY,
     "transaction_intent": TRANSACTION,
@@ -204,7 +217,7 @@ LEXICONS = {
 
 #: how many distinct rules must fire for a signal to reach 1.0
 _SATURATE_AT = {
-    "urgency": 3, "secrecy": 2, "authority_claim": 2,
+    "urgency": 3, "secrecy": 2, "authority_claim": 2, "threat_coercion": 3,
     "transaction_intent": 3, "out_of_workflow": 2, "credential_solicitation": 2,
 }
 

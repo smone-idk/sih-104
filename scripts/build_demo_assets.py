@@ -237,6 +237,76 @@ def build_cloned(quick: bool, m: dict, variants: int = 1) -> None:
     print("     Key demo tier: HIGH synthetic prob AND HIGH speaker similarity.")
 
 
+def build_scenarios(quick: bool, m: dict, variants: int = 1) -> None:
+    """Full-length demo clips — the WHOLE script as one call, not a chunk.
+
+    The measurement corpus (synthetic/ and cloned/) is deliberately chunked into
+    thirds, which gives more clips per script. But a demo scenario pointing at a
+    `_p1` chunk only ever plays the call OPENING: the OTP ask and the money
+    demand live in later chunks, so the context engine had nothing to find. That
+    is a trap — the fraud content sat in a file the demo never analysed.
+
+    These clips are rendered separately (not concatenated) so there is no splice
+    artifact to confound the anti-spoofing detector, and they live in their own
+    directory so they never double-count in the measurement tiers.
+    """
+    out = ASSETS / "scenarios"
+    out.mkdir(parents=True, exist_ok=True)
+    scripts = sorted(SCRIPTS.glob("*_en.txt"))[: (2 if quick else None)]
+
+    made = 0
+    try:
+        from piper import PiperVoice, SynthesisConfig
+        import wave
+
+        onnx, _ = _piper_voice_files()
+        voice = PiperVoice.load(str(onnx))
+        syn = SynthesisConfig(length_scale=1.0, noise_scale=0.667, noise_w_scale=0.8)
+        for sp in scripts:
+            dest = out / f"synthetic_{sp.stem}_full.wav"
+            with wave.open(str(dest), "wb") as wf:
+                voice.synthesize_wav(_clean_script(sp), wf, syn_config=syn)
+            record(m, dest, tier="scenario_synthetic", language="en",
+                   source=f"Piper TTS voice {PIPER_VOICE}", licence="MIT",
+                   speaker_id=PIPER_VOICE, upstream_path=str(sp.relative_to(ASSETS)),
+                   model=f"piper/{PIPER_VOICE}",
+                   params={"length_scale": 1.0, "full_script": True},
+                   note="full-length demo clip; not part of the measurement corpus")
+            print(f"  [ok] {dest.name}")
+            made += 1
+    except Exception as exc:
+        print(f"  piper unavailable ({exc}) — skipping synthetic scenarios")
+
+    refs = sorted((ASSETS / "genuine").glob("enrolled_*.wav"))[:3]
+    try:
+        from TTS.api import TTS
+        import torch
+
+        if not refs:
+            raise RuntimeError("run --tier genuine first")
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        tts = TTS(XTTS_MODEL).to(dev)
+        for sp in scripts:
+            dest = out / f"cloned_{sp.stem}_full.wav"
+            tts.tts_to_file(text=_clean_script(sp),
+                            speaker_wav=[str(r) for r in refs],
+                            language="en", file_path=str(dest))
+            record(m, dest, tier="scenario_cloned", language="en",
+                   source="Coqui XTTS-v2 voice clone of LibriSpeech spk 1272",
+                   licence="Coqui Public Model License (non-commercial)",
+                   speaker_id="1272 (cloned)",
+                   upstream_path=str(sp.relative_to(ASSETS)),
+                   model=XTTS_MODEL,
+                   params={"language": "en", "device": dev, "full_script": True},
+                   note="full-length demo clip; not part of the measurement corpus")
+            print(f"  [ok] {dest.name}")
+            made += 1
+    except Exception as exc:
+        print(f"  coqui-tts unavailable ({exc}) — skipping cloned scenarios")
+
+    print(f"[ok] scenarios: {made} full-length clips -> {out}")
+
+
 def _clean_script(path: Path) -> str:
     return " ".join(
         ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
@@ -356,7 +426,7 @@ def write_provenance(m: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tier", choices=["genuine", "synthetic", "cloned"])
+    ap.add_argument("--tier", choices=["genuine", "synthetic", "cloned", "scenarios"])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--variants", type=int, default=1,
@@ -373,7 +443,7 @@ def main() -> int:
         write_provenance(m)
         return 0
 
-    tiers = ["genuine", "synthetic", "cloned"] if args.all else (
+    tiers = ["genuine", "synthetic", "cloned", "scenarios"] if args.all else (
         [args.tier] if args.tier else [])
     if not tiers:
         ap.error("pass --tier {genuine|synthetic|cloned}, --all, or --provenance")
@@ -381,7 +451,8 @@ def main() -> int:
     for tier in tiers:
         print(f"\n=== build tier: {tier} ===")
         {"genuine": build_genuine, "synthetic": build_synthetic,
-         "cloned": build_cloned}[tier](args.quick, m, args.variants)
+         "cloned": build_cloned, "scenarios": build_scenarios
+         }[tier](args.quick, m, args.variants)
         save_manifest(m)
 
     write_provenance(m)

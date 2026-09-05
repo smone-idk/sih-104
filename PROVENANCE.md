@@ -120,4 +120,4 @@ intent. They exist as text so they can be regenerated in any voice or language.
 | `cloned/cloned_govt_summons_en_p2.wav` | 15.543 | 24000 | Coqui XTTS-v2 voice clone of LibriSpeech spk 1272 | Coqui Public Model License (non-commercial) | tts_models/multilingual/multi-dataset/xtts_v2 | device=cuda, language=en, speaker_wav=['enrolled_1272_1272-128104-0000.wav', 'enrolled_1272_1272-128104-0001.wav', 'enrolled_1272_1272-128104-0002.wav'] | `7b8e05d7ad0aeed2…` |
 | `cloned/cloned_govt_summons_en_p3.wav` | 10.903 | 24000 | Coqui XTTS-v2 voice clone of LibriSpeech spk 1272 | Coqui Public Model License (non-commercial) | tts_models/multilingual/multi-dataset/xtts_v2 | device=cuda, language=en, speaker_wav=['enrolled_1272_1272-128104-0000.wav', 'enrolled_1272_1272-128104-0001.wav', 'enrolled_1272_1272-128104-0002.wav'] | `490b554e1658a8ce…` |
 
-_Regenerated 2026-09-03 from `demo_assets/manifest.json` (62 clips). Full SHA256 digests are in the manifest._
+_Regenerated 2026-09-05 from `demo_assets/manifest.json` (72 clips). Full SHA256 digests are in the manifest._

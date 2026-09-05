@@ -151,15 +151,91 @@ def test_caller_trust_from_directory():
 
 
 def test_behavioural_risk_carries_its_parts():
+    from voiceshield.context.engine import BEHAVIOURAL_WEIGHTS
+
     res = analyze_context(_transcript(CEO), None)
     br = res.components["behavioural_risk"]
     assert br["available"] and br["value"] > 0
     parts = br["detail"]["parts"]
-    assert set(parts) == {"credential_solicitation", "out_of_workflow", "secrecy",
-                          "urgency", "authority_claim"}
+    assert set(parts) == set(BEHAVIOURAL_WEIGHTS)
     for p in parts.values():
         if p["value"] > 0:
             assert p["quotes"], "a contributing part must carry its quotes"
+
+
+# --- availability rule (§7): absence of evidence is not evidence of safety ---
+def test_empty_context_layers_are_unavailable_not_zero():
+    """A transcript with no fraud language must leave the context layers
+    UNAVAILABLE so their weight redistributes — reporting 0.0 would hand a
+    fifth of the score budget to 'no evidence' and dilute the acoustic layers."""
+    res = analyze_context(_transcript(BENIGN), None)
+    for name in ("transaction_context", "behavioural_risk"):
+        c = res.components[name]
+        assert c["available"] is False, name
+        assert "not applicable" in c["note"], c["note"]
+
+
+def test_context_can_only_raise_risk_never_lower_it():
+    """The consequence of the availability rule, asserted directly: adding a
+    benign transcript must not reduce a score computed without one."""
+    from voiceshield.fusion.scorer import ComponentInput, fuse
+
+    acoustic = {
+        "voice_authenticity": ComponentInput(1.0),
+        "speaker_consistency": ComponentInput(0.05),
+        "prosody_anomaly": ComponentInput(0.4),
+    }
+    without = fuse(dict(acoustic)).score
+
+    benign = analyze_context(_transcript(BENIGN), None)
+    with_ctx = dict(acoustic)
+    for name, c in benign.components.items():
+        with_ctx[name] = ComponentInput(value=c["value"], available=c["available"],
+                                        note=c["note"])
+    assert fuse(with_ctx).score == pytest.approx(without, abs=1e-6)
+
+
+def test_populated_context_layers_are_available():
+    res = analyze_context(_transcript(CEO), None)
+    assert res.components["transaction_context"]["available"] is True
+    assert res.components["behavioural_risk"]["available"] is True
+
+
+# --- threat/coercion family ------------------------------------------
+@pytest.mark.parametrize("text,rule", [
+    ("a case has been registered against you", "legal_process"),
+    ("a warrant will be issued", "legal_process"),
+    ("this is a non-bailable offence", "legal_process"),
+    ("you will be arrested today", "arrest_threat"),
+    ("a penalty of two lakh rupees", "penalty_threat"),
+    ("your account will be frozen", "penalty_threat"),
+    ("this is from the income tax department", "agency_process"),
+    ("stay on the line, do not hang up", "stay_on_line"),
+])
+def test_threat_coercion_fires_with_a_quote(text, rule):
+    sig = extract_all(text)["threat_coercion"]
+    assert sig.value > 0, text
+    assert rule in {m.rule for m in sig.matches}
+    assert sig.matches[0].quote
+
+
+@pytest.mark.parametrize("text", [
+    "that's fine, talk soon",
+    "I'm fine thanks",
+    "the sales department will call you",
+    "we booked the tennis court",
+    "read the fine print",
+    "I'll send you the notice board photo",
+])
+def test_threat_coercion_does_not_fire_on_benign_speech(text):
+    """Bare tokens (fine, court, department, notice, police) are deliberately
+    NOT matched — only their fraud-bearing forms are."""
+    assert extract_all(text)["threat_coercion"].value == 0, text
+
+
+def test_threat_coercion_respects_negation():
+    assert extract_all("you will be arrested")["threat_coercion"].value > 0
+    assert extract_all("no arrest is being threatened")["threat_coercion"].value == 0
 
 
 # --- segmentation (the Phase 3 decision) -------------------------------

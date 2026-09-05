@@ -77,6 +77,7 @@ def wer(ref: list[str], hyp: list[str]) -> tuple[float, dict]:
                 d[i][j] = best
                 bt[i][j] = "S" if best == sub else ("D" if best == dele else "I")
     i, j, counts = n, m, {"S": 0, "D": 0, "I": 0, "N": n}
+    inserted: list[str] = []
     while i > 0 or j > 0:
         op = bt[i][j]
         if op == "=":
@@ -89,7 +90,9 @@ def wer(ref: list[str], hyp: list[str]) -> tuple[float, dict]:
             i -= 1
         else:
             counts["I"] += 1
+            inserted.append(hyp[j - 1])
             j -= 1
+    counts["inserted_words"] = list(reversed(inserted))
     return d[n][m] / n, counts
 
 
@@ -120,6 +123,59 @@ def librispeech_refs() -> dict[str, str]:
                         uid, text = line.split(" ", 1)
                         out[uid] = text
     return out
+
+
+def _lexicon_check(per_clip_insertions: list[tuple[str, list[str]]]) -> dict:
+    """Do hallucinated insertions ever match a context lexicon pattern?
+
+    The Phase 3 WER finding left this open: Whisper invents words on XTTS
+    output, and an invented word matching a rule would produce a context flag
+    quoting something nobody said. This closes it with a measurement.
+
+    Insertions are checked PER CLIP. Concatenating them across clips is wrong —
+    it manufactures spans that never existed in any transcript (our first
+    attempt did exactly that and reported a bogus "right now" hit stitched from
+    two different clips).
+    """
+    sys.path.insert(0, str(REPO / "backend"))
+    from voiceshield.context.signals import LEXICONS, parse_amount
+
+    import re as _re
+    pats = [(sig, rule, pat) for sig, rules in LEXICONS.items() for rule, pat in rules]
+    total = 0
+    distinct: set[str] = set()
+    word_hits, span_hits, amounts = [], [], []
+    for clip, words in per_clip_insertions:
+        total += len(words)
+        distinct |= set(words)
+        for w in set(words):
+            for sig, rule, pat in pats:
+                if _re.search(pat, w, _re.I):
+                    word_hits.append({"clip": clip, "word": w,
+                                      "signal": sig, "rule": rule})
+        blob = " ".join(words)          # within ONE clip only
+        for sig, rule, pat in pats:
+            for mm in _re.finditer(pat, blob, _re.I):
+                span_hits.append({"clip": clip, "span": mm.group(0)[:60],
+                                  "signal": sig, "rule": rule})
+        amt, _ = parse_amount(blob)
+        if amt is not None:
+            amounts.append({"clip": clip, "amount": amt})
+    clean = not word_hits and not span_hits and not amounts
+    return {
+        "method": "per-clip; insertions are never concatenated across clips",
+        "n_inserted_words": total,
+        "n_distinct": len(distinct),
+        "single_word_matches": word_hits,
+        "within_clip_span_matches": span_hits,
+        "amounts_parsed_from_insertions": amounts,
+        "verdict": ("no hallucinated word, span or amount matches any lexicon "
+                    "pattern — the false-positive risk flagged in Phase 3 is not "
+                    "realised on this corpus"
+                    if clean else
+                    "SOME hallucinated text matches a lexicon — false-positive "
+                    "risk is real"),
+    }
 
 
 def transcribe(path: Path) -> str:
@@ -168,16 +224,21 @@ def main() -> int:
             print(f"{tier:<10}   0  (no clips / no ground truth)")
             continue
         tot = {"S": 0, "D": 0, "I": 0, "N": 0}
+        clip_insertions: list[tuple[str, list[str]]] = []
         per_clip = []
         for path, ref in items:
             r, h = normalise(ref), normalise(transcribe(path))
             rate, c = wer(r, h)
-            for k in tot:
+            for k in ("S", "D", "I", "N"):
                 tot[k] += c[k]
+            ins = c.get("inserted_words", [])
+            clip_insertions.append((path.name, ins))
             per_clip.append({"clip": path.name, "wer": round(rate, 4),
-                             "ref_words": c["N"], **{k: c[k] for k in "SDI"}})
+                             "ref_words": c["N"], **{k: c[k] for k in "SDI"},
+                             "inserted_words": ins})
         overall = (tot["S"] + tot["D"] + tot["I"]) / max(1, tot["N"])
         report["tiers"][tier] = {
+            "hallucinated_insertions": _lexicon_check(clip_insertions),
             "n_clips": len(items), "ref_words": tot["N"],
             "wer": round(overall, 4),
             "substitutions": tot["S"], "deletions": tot["D"], "insertions": tot["I"],

@@ -398,36 +398,43 @@ _(updated at the end of each build phase)_
   - **Short clips get little context.** Utterances shorter than
     `asr_min_segment_seconds` produce no transcript, so a ~6 s clip can score on
     acoustics alone (the family-emergency scenario lands MEDIUM with 0 quotes).
-  - **Measured: context can push a fraud call's score DOWN.** Bank OTP (clone)
-    scores 58.8 with context off and **45.5** with it on. The cause is weight
-    redistribution, not a weak signal averaging things down:
+  - **FIXED — context could push a fraud call's score DOWN.** Bank OTP scored
+    58.8 with context off and 45.5 with it on, because three context components
+    reported `0.0` while holding their full weight, diluting the acoustic layers.
 
-    | component | context OFF | context ON |
-    |---|---|---|
-    | voice_authenticity | eff. weight 0.500 → **50.0 pts** | eff. weight 0.300 → **30.0 pts** |
-    | caller_trust | unavailable (weight redistributed) | 0.970 → +9.7 pts |
-    | behavioural_risk | unavailable | 0.050 → +0.5 pts |
-    | transaction_context | unavailable | **0.000 → +0.0 pts, holding 0.20 weight** |
+    **The availability rule.** A transcript-derived component that matched
+    nothing now reports `available=False` and its weight redistributes, exactly
+    as the speaker layer does with no enrolled profile. It never reports 0.0.
+    The explainability table says *"no transaction discussed — layer not
+    applicable"* rather than showing 0.000 against a 0.20 weight.
 
-    With three context components unavailable, the acoustic layers renormalise
-    to 1.0 and voice_authenticity carries 0.50. Turning context on dilutes it to
-    0.30 — a 20-point loss — while context returns only 10.2. The specific
-    offender is `transaction_context`: **20 % of the score budget assigned to a
-    component that found nothing.** Fusion currently cannot distinguish "this
-    layer looked and found nothing" from "this layer found an absence of risk",
-    and treats an available-but-zero component as evidence of safety.
-    The `CLONED_VOICE` band floor masks the outcome here, but a judge reading
-    the explainability table on an OTP scam sees context contributing nothing
-    while diluting real evidence. **Not yet fixed — diagnosed only.**
-  - **Two coverage gaps compound that.** (a) Scenarios point at `_p1` chunks,
-    which hold only the call opening; the fraud payload (the OTP ask, the money
-    demand) is in `_p2`/`_p3`. Per chunk only 1–2 signals fire, against 4–6 on
-    the full script. (b) There is **no government-impersonation vocabulary at
-    all**: *summons, penalty, case number, warrant, arrest, notice, legal
-    action, court, fine, investigation, FIR, police* — 14/14 terms match no
-    pattern in any lexicon. The govt-summons scenario fires only via
-    `law_enforcement` ("Inspector Verma") and `national_id` ("Aadhaar"); there
-    is no threat/coercion signal family. **Not yet fixed — measured only.**
+    **The consequence is deliberate and correct for a triage tool: context can
+    only RAISE risk, never lower it. Absence of evidence is not evidence of
+    safety.** `test_context_can_only_raise_risk_never_lower_it` asserts it
+    directly — folding a benign transcript into an acoustic-only score must
+    leave that score unchanged.
+
+    `caller_trust` is the one component that stays available with a low value,
+    and that is not an exception: a directory record is *presence* of evidence
+    about the caller. With no record attached it is unavailable like the rest.
+
+  - **FIXED — two coverage gaps.** (a) Demo scenarios pointed at `_p1` chunks
+    holding only the call opening, so the OTP ask and the money demand sat in
+    files the demo never analysed. Scenarios now use full-length renders in
+    `demo_assets/scenarios/` (rendered separately, not concatenated, so there is
+    no splice artifact); the chunked tiers remain the measurement corpus.
+    (b) Added a **`threat_coercion`** signal family — legal process, arrest
+    threat, penalty threat, agency process, stay-on-the-line — with the same
+    span-traced structure and the same negation guard.
+
+    Bare tokens are deliberately NOT matched. *fine, court, department, notice,
+    police* alone would fire on "that's fine", "tennis court", "the sales
+    department", "the fine print". Only fraud-bearing forms match ("a fine of",
+    "court order", "income tax department", "legal notice"). Verified: 12/12
+    fraud phrasings fire, 0/8 benign phrasings do.
+
+    Effect on the demo, per scenario: govt summons **0 → 13 quotes**, bank OTP
+    **1 → 7**, CEO transfer **5 → 10**, benign control still **0**.
   - **Hindi/Punjabi lexicons exist but are untested** — a handful of Hinglish
     terms are in the patterns, with no Hindi/Punjabi audio in the corpus to
     exercise them. Do not read their presence as language support.
@@ -451,10 +458,42 @@ _(updated at the end of each build phase)_
 
   Consequence for the context engine, stated precisely: **signal recall is
   largely intact** (trigger phrases survive, which is why the cloned CEO call
-  still produces 5 correct quotes), but hallucinated text is a **false-positive
-  surface** — invented words could match a lexicon pattern and produce a quote
-  that was never spoken. We have not observed that yet and have not measured its
-  rate. This is an upstream Whisper/XTTS interaction, not a defect we introduced.
+  still produces correct quotes), but hallucinated text is a **false-positive
+  surface** — invented words can match a lexicon pattern and produce a quote
+  nobody spoke.
+
+  **We measured that surface rather than leaving it as a caveat**
+  (`scripts/measure_wer.py` now checks every inserted word and every
+  within-clip span of insertions against all seven lexicons):
+
+  | tier | inserted words | single-word matches | within-clip span matches | amounts parsed |
+  |---|---|---|---|---|
+  | genuine | 3 | 0 | 0 | 0 |
+  | Piper | 3 | 0 | 0 | 0 |
+  | XTTS cloned | 88 (67 distinct) | **0** | **1** | 0 |
+
+  **It is not zero — one real false positive.** On
+  `cloned_genuine_control_en_p3.wav` the reference is *"Nothing urgent, give me
+  a call back whenever you get a chance."* Whisper hallucinated *"7 at the year
+  **right now** and I only get it"*, and "right now" fires
+  `urgency/immediacy` at 4.7 s. So the **benign** script, cloned, produces a
+  spurious urgency flag quoting words nobody said. Note the irony: the real
+  "Nothing urgent" is correctly suppressed by the negation guard; the
+  hallucination is not, because it arrives unnegated.
+
+  Rate on this corpus: **1 spurious context signal across 15 cloned clips**
+  (88 hallucinated words). Its practical impact is small — `behavioural_risk`
+  reached 0.04 — but it is a real defect in the evidence chain, and it is the
+  reason the Phase 3 gate ("every flag traces to a quote") is necessary but not
+  sufficient: the quote was genuinely in the transcript, and the transcript was
+  wrong. Mitigating it needs ASR confidence gating (Whisper's `avg_logprob` /
+  `no_speech_prob` are already captured per segment but not yet used to suppress
+  low-confidence spans) — on the roadmap, not in the prototype.
+
+  Methodological note: our first attempt at this check concatenated insertions
+  across all clips and reported a "right now" hit stitched from two different
+  files. That was an artifact of the measurement, not the data. The check is now
+  strictly per-clip.
 
 - **Decision: the context engine is regex-only, deliberately.** §5 called for
   "rule + regex + small classifier". We built the rules and regex and

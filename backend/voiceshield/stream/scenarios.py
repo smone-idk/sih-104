@@ -6,6 +6,12 @@ transport is simulated, the analysis is not, and there is no scripted score.
 
 The genuine control is deliberately included: a demo where a real human call
 correctly scores LOW is more persuasive than five that score HIGH.
+
+Attack scenarios point at `scenarios/*_full.wav` — the WHOLE script rendered as
+one call. They used to point at `_p1` chunks, which contain only the call
+opening, so the OTP ask and the money demand sat in files the demo never
+analysed and the context engine had nothing to find. The chunked `synthetic/`
+and `cloned/` tiers remain the measurement corpus.
 """
 from __future__ import annotations
 
@@ -58,7 +64,7 @@ SCENARIOS: list[Scenario] = [
         tier="cloned",
         expected="synthetic markers present AND speaker matches the enrolled "
                  "profile -> CLONED_VOICE",
-        relpath="cloned/cloned_ceo_transfer_en_p1.wav",
+        relpath="scenarios/cloned_ceo_transfer_en_full.wav",
         caller_claims="Rajesh Sharma — CFO",
     ),
     Scenario(
@@ -68,7 +74,7 @@ SCENARIOS: list[Scenario] = [
                     "asking for an OTP.",
         tier="cloned",
         expected="CLONED_VOICE; credential solicitation once context lands (Phase 3)",
-        relpath="cloned/cloned_bank_otp_en_p1.wav",
+        relpath="scenarios/cloned_bank_otp_en_full.wav",
         caller_claims="HDFC Fraud Dept (claimed)",
         directory_contact="HDFC Fraud Dept (claimed)",
     ),
@@ -78,7 +84,7 @@ SCENARIOS: list[Scenario] = [
         description="Synthetic voice, unrelated speaker, threatening legal action.",
         tier="synthetic",
         expected="synthetic markers present AND speaker mismatch -> SYNTHETIC_OTHER",
-        relpath="synthetic/synthetic_govt_summons_en_p1.wav",
+        relpath="scenarios/synthetic_govt_summons_en_full.wav",
         caller_claims="Inspector Verma (claimed)",
         directory_contact="Inspector Verma (claimed)",
     ),
@@ -88,7 +94,7 @@ SCENARIOS: list[Scenario] = [
         description="Synthetic voice claiming a relative is in trouble and needs money.",
         tier="synthetic",
         expected="SYNTHETIC_OTHER",
-        relpath="synthetic/synthetic_family_emergency_en_p1.wav",
+        relpath="scenarios/synthetic_family_emergency_en_full.wav",
         caller_claims="Unknown Caller",
     ),
     Scenario(
@@ -99,6 +105,19 @@ SCENARIOS: list[Scenario] = [
         tier="genuine",
         expected="no synthetic markers, speaker matches -> CONSISTENT, band LOW",
         relpath="genuine/enrolled_1272_1272-128104-0002.wav",
+        caller_claims="Rajesh Sharma — CFO",
+        directory_contact="Rajesh Sharma",
+    ),
+    Scenario(
+        id="benign_script_cloned",
+        title="Benign call — but in a cloned voice",
+        description="The harmless team-lunch script, rendered in a clone of the "
+                    "enrolled CFO's voice. Nothing fraudulent is said.",
+        tier="cloned",
+        expected="acoustic layers detect the clone (CLONED_VOICE); context finds "
+                 "no fraud language, so the context layers report not-applicable "
+                 "rather than lowering the score",
+        relpath="scenarios/cloned_genuine_control_en_full.wav",
         caller_claims="Rajesh Sharma — CFO",
         directory_contact="Rajesh Sharma",
     ),

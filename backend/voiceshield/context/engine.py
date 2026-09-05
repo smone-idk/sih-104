@@ -7,6 +7,17 @@ Produces the three context-derived fusion components:
                           credential/PII solicitation
   caller_trust         <- enterprise directory (DEMO DATA, labelled as such)
 
+AVAILABILITY RULE (§7). A transcript-derived component that matched nothing
+reports `available=False` and its weight redistributes, exactly as the speaker
+layer does with no enrolled profile. It never reports 0.0. The consequence is
+deliberate and correct for a triage tool: **context can only raise risk, never
+lower it.** Absence of evidence is not evidence of safety.
+
+`caller_trust` is the exception, and it is not an exception to the rule: a
+directory record is *presence* of evidence about the caller, so it stays
+available (and a known, verified contact legitimately reports low risk). With no
+directory record attached it is unavailable, like the others.
+
 Every signal carries the transcript span that produced it, and each match is
 resolved back to the utterance and timestamp it came from, so the UI can show
 the judge exactly why a flag fired.
@@ -28,11 +39,12 @@ log = logging.getLogger("voiceshield.context")
 #: behavioural_risk is a weighted mix of the behavioural signals. Weights are
 #: expert-elicited priors, like the fusion weights — not fitted.
 BEHAVIOURAL_WEIGHTS = {
-    "credential_solicitation": 0.30,
-    "out_of_workflow": 0.25,
-    "secrecy": 0.20,
-    "urgency": 0.15,
-    "authority_claim": 0.10,
+    "credential_solicitation": 0.25,
+    "threat_coercion": 0.20,
+    "out_of_workflow": 0.20,
+    "secrecy": 0.15,
+    "urgency": 0.12,
+    "authority_claim": 0.08,
 }
 
 
@@ -110,16 +122,21 @@ def analyze_context(transcript: Transcript,
         _locate(sig, transcript)
 
     # --- transaction_context ---
+    # A layer that looked and found nothing is UNAVAILABLE, not 0.0. Reporting
+    # 0.0 would hand a fifth of the score budget to "no evidence" and dilute the
+    # acoustic layers — which measurably pushed a fraud call's score DOWN (§7).
+    # Absence of evidence is not evidence of safety.
     tx = res.signals["transaction_intent"]
     res.components["transaction_context"] = _component(
         tx.value,
-        f"{len(tx.matches)} transcript match(es)" if tx.matches
-        else "no transaction language found",
+        f"{len(tx.matches)} transcript match(es)",
         {"rules_fired": tx.detail.get("rules_fired", []),
          "amount_inr": tx.detail.get("amount_inr"),
          "amount_text": tx.detail.get("amount_text"),
          "quotes": [m.as_dict() for m in tx.matches]},
-    )
+    ) if tx.matches else _component(
+        0.0, "no transaction discussed — layer not applicable", {},
+        available=False)
 
     # --- behavioural_risk ---
     parts, fired = {}, []
@@ -135,10 +152,11 @@ def analyze_context(transcript: Transcript,
             fired.append(name)
     res.components["behavioural_risk"] = _component(
         min(1.0, total),
-        f"{len(fired)} behavioural signal(s) fired" if fired
-        else "no behavioural signals found",
+        f"{len(fired)} behavioural signal(s) fired",
         {"parts": parts, "fired": fired},
-    )
+    ) if fired else _component(
+        0.0, "no behavioural signals in the transcript — layer not applicable",
+        {"parts": parts}, available=False)
 
     res.components.update(_caller_trust(directory))
     return res
