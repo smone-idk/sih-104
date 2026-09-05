@@ -28,7 +28,8 @@ from ...config import get_settings
 from ...ingest.audio import load_audio
 from ...ingest.telephony import TelephonyConfig
 from ...asr.worker import AsrWorker
-from ...store.repo import get_contact, get_profile, unknown_caller
+from ...store.repo import (create_incident, get_contact, get_profile,
+                           save_session_result, unknown_caller)
 from ...stream import scenarios as scen
 from ...stream.session import StreamSession
 
@@ -153,7 +154,35 @@ async def stream(ws: WebSocket) -> None:
             await ws.send_json(StreamSession.window_payload(wsr))
         await drain_asr(force=True)
 
-        await ws.send_json(session.final_payload())
+        final = session.final_payload()
+        # Persist the result SERVER-SIDE. This row is the only thing the
+        # approval gate reads for risk — a client cannot assert its own band.
+        try:
+            save_session_result(session.meta.session_id, {
+                "source": session.meta.source,
+                "channel": session.meta.channel,
+                "scenario": session.meta.scenario,
+                "telephony_degraded": session.meta.telephony_degraded,
+                "duration_s": final.get("duration_s"),
+                "final_score": final.get("score"),
+                "final_band": final.get("band"),
+                "device": s.device,
+                "weights": s.fusion_weights(),
+            })
+            if final.get("band") in ("MEDIUM", "HIGH"):
+                create_incident({
+                    "session_id": session.meta.session_id,
+                    "band": final["band"], "score": final["score"],
+                    "action": "ESCALATE" if final["band"] == "HIGH" else "VERIFY",
+                    "summary": f"{final['band']} risk call analysed "
+                               f"({final.get('voice_verdict')})",
+                    "payload": {"scenario": session.meta.scenario,
+                                "findings": [f["code"] for f in final.get("findings", [])],
+                                "quotes": final.get("context_quotes", [])[:10]},
+                })
+        except Exception as exc:                    # never break the stream
+            log.warning("failed to persist session: %s", exc)
+        await ws.send_json(final)
     except WebSocketDisconnect:
         log.info("stream client disconnected")
     except asyncio.TimeoutError:

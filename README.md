@@ -171,7 +171,7 @@ Built in strict order; a phase does not start until the previous gate passes
 | 1 ✅ | Batch pipeline as a CLI (`python analyze.py clip.wav` → JSON) | Two clips → two different explainable scores; detector tests pass |
 | 2 ✅ | WebSocket streaming + Live Analysis screen | Genuine clip LOW, cloned clip higher, no controls touched |
 | 3 | Whisper worker + context engine + explainability | Every context flag traces to a transcript quote |
-| 4 | Policy engine, mock approval blocked at API, challenge-response, incident log | `curl POST /approve` → 403 while risk HIGH |
+| 4 ✅ | Policy engine, mock approval blocked at API, challenge-response, incident log | `curl POST /approve` → 403 while risk HIGH |
 | 5 | Voice profiles, upload UI, push-to-record, telephony toggle | Removing a profile disables speaker layer, redistributes weight |
 | 6 | Eval harness + page, Privacy Center, API page, architecture, docs | §16 checklist clean |
 

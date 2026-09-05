@@ -396,6 +396,66 @@ extracted but nothing is blocked on it yet.
 
 ---
 
+## Phase 4 — Policy engine, API-level approval block ✅
+
+**Gate:** `curl POST /approve` returns 403 while risk is HIGH — **PASSED**.
+
+```
+### 1. stream the cloned CEO call — the server records the band itself
+session: f7fde73f-…
+### 2. curl POST /approve
+   HTTP 403
+   verification_required | band HIGH | action ESCALATE
+   Possible AI voice impersonation — do not approve the requested action
+   until identity is independently verified.
+### 3. FORGED payload {"band":"LOW","verified":true,"override":true}
+   HTTP 403
+   server band: HIGH (forged payload said LOW) -> verification_required
+### 4. simulated callback verification, then re-approve
+   callback passed | simulated
+   HTTP 200 after verification
+```
+
+**The security property.** The 403 derives from **server-side state only**. The
+request body is parsed with `extra="ignore"`, so invented fields are accepted and
+then never consulted: the band is read from the `sessions` row the analysis
+pipeline wrote, the verification state from the `verifications` table.
+`test_forged_low_risk_payload_is_ignored` runs **six** forged payload shapes
+(`band`, `final_band`, `verified`, `policy.allowed`, `override/admin`, nested
+`session`) and asserts 403 for every one, plus that the response reports the
+*server's* band. A separate test proves that naming a different low-risk session
+in the body does not redirect the lookup, and another that a client cannot mint a
+verification through `/approve`.
+
+**Fails closed**, not open: no linked session → 403 (`cause: no_session`);
+analysis incomplete → 403; verification `pending` or `failed` → 403.
+
+**Built:** `policy/engine.py` (band → ALLOW/VERIFY/ESCALATE + the approval
+decision), `policy/challenge.py` (CSPRNG phrase generator, phrase matching),
+`api/routes/approvals.py`, and the Approvals + Incidents pages. Challenge–response
+is **real**: the response audio runs through the same `analyze_file` pipeline, and
+both the phrase match *and* the acoustic verdict must pass. The other three
+methods are a labelled `SIMULATED` state machine. Every approval attempt,
+verification attempt and reset writes an incident row.
+
+**Three defects this phase surfaced and fixed:**
+- **The test suite was writing into the demo database.** `TestClient(app)` used
+  the production SQLite file, and 15 test approvals had leaked into it. `conftest`
+  now points `VOICESHIELD_DB_PATH` at a temp file *before* anything imports the
+  lru_cached settings, with a session fixture that asserts it took effect.
+- **The demo was not repeatable** — once verified, the approval stayed approved.
+  Added `POST /approvals/{id}/reset`, labelled a demo affordance. It is not a
+  bypass: it clears the linked session, and with no session the policy fails
+  closed. Its own test asserts that.
+- **The incident log could not be deterministically ordered.** `created_at` is
+  second-resolution, so rows landing in the same second sorted arbitrarily —
+  bad for an audit log. Ordering now breaks ties on monotonic `rowid`.
+
+122 tests pass; `make grep-honesty` clean; verified in a browser (Approve button
+disabled, forged bypass → HTTP 403 shown in-page, no JS errors).
+
+---
+
 ## Phase 3 — segmentation decision (made before wiring)
 
 Whisper wants utterance-shaped input, which would be a third granularity beside

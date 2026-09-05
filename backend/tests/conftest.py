@@ -1,10 +1,38 @@
 """Shared fixtures. Synthetic signals are deterministic (fixed seed / closed
 form) so detector tests have known-input/known-output behaviour without shipping
-audio blobs (§14)."""
+audio blobs (§14).
+
+IMPORTANT: this module points the DB at a throwaway file BEFORE anything imports
+`voiceshield.config`, whose Settings is lru_cached. Without this the API tests
+write approvals, verifications and incidents straight into the demo database and
+quietly corrupt the demo state.
+"""
 from __future__ import annotations
 
-import numpy as np
-import pytest
+import os
+import tempfile
+from pathlib import Path as _Path
+
+_TEST_DB = _Path(tempfile.mkdtemp(prefix="voiceshield-test-")) / "test.sqlite"
+os.environ["VOICESHIELD_DB_PATH"] = str(_TEST_DB)
+
+import numpy as np      # noqa: E402
+import pytest           # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_db():
+    """Fail loudly if the real database ever gets wired into a test run."""
+    from voiceshield.config import get_settings
+    from voiceshield.store.db import init_db
+
+    s = get_settings()
+    assert str(s.db_path) == str(_TEST_DB), (
+        f"tests must not touch the real DB (got {s.db_path})")
+    init_db()
+    yield
+    for suffix in ("", "-wal", "-shm"):
+        _Path(str(_TEST_DB) + suffix).unlink(missing_ok=True)
 
 SR = 16000
 

@@ -469,6 +469,24 @@ _(updated at the end of each build phase)_
   fraud-call data to fit it on — that is a data problem, not a code one, and it
   is on the production roadmap.
 
+- **Phase 4 (policy / approval gate):**
+  - **Challenge–response defeats replay, not live voice conversion.** A fresh
+    CSPRNG phrase cannot be present in audio recorded before it was issued. It
+    does nothing against an attacker running real-time voice conversion who can
+    simply repeat the phrase in the cloned voice. Stated on the card in the UI.
+  - **Callback / MFA / supervisor are a `SIMULATED` state machine.** Nothing is
+    contacted; the demo operator chooses the outcome. They exist so the workflow
+    and the incident log are complete, and they are badged as simulated.
+  - **The approval is a mock.** No payment system is touched. What is real is
+    the *control*: the server refuses, and refuses on evidence it computed.
+  - **There is no authentication.** Any client on the host can call the API. The
+    property demonstrated is that the client cannot forge its *risk state* — not
+    that the endpoint is access-controlled. A production deployment needs
+    authn/authz, per-approver identity, and an append-only audit store; the
+    SQLite incident log is not tamper-evident.
+  - **`Reset demo` exists and is labelled.** It returns an approval to pending
+    and clears its session, which makes the policy fail closed rather than open.
+    It is still a state-changing endpoint with no auth (see above).
 - **Corpus, as built (v1):**
 
   | tier | clips | total | min / median / max | native sr |

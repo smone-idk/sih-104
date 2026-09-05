@@ -258,3 +258,116 @@ export function openStream(
     }
   };
 }
+
+// ---------------------------------------------------------------- Phase 4
+export interface PolicyDecision {
+  action: "ALLOW" | "VERIFY" | "ESCALATE";
+  allowed: boolean;
+  reason: string;
+  band: Band | null;
+  score: number | null;
+  error_code: string;
+  detail: Record<string, unknown>;
+}
+
+export interface Approval {
+  id: string;
+  created_at: string;
+  description: string;
+  amount: number;
+  currency: string;
+  state: "pending" | "blocked" | "approved" | "rejected";
+  session_id: string | null;
+  unlocked_by: string | null;
+  policy: PolicyDecision;
+  session: { id: string; final_band: Band; final_score: number; scenario: string | null } | null;
+}
+
+export interface Verification {
+  id: string;
+  created_at: string;
+  session_id: string | null;
+  method: string;
+  challenge_phrase: string | null;
+  result: "pending" | "passed" | "failed";
+  detail: Record<string, unknown>;
+}
+
+export interface Incident {
+  id: string;
+  created_at: string;
+  session_id: string | null;
+  band: string;
+  score: number;
+  action: string;
+  summary: string;
+  payload: Record<string, unknown>;
+}
+
+export async function getApprovals(): Promise<{ approvals: Approval[]; note: string }> {
+  return (await fetch(`${base}/approvals`)).json();
+}
+
+export async function linkSession(approvalId: string, sessionId: string) {
+  return (await fetch(`${base}/approvals/${approvalId}/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  })).json();
+}
+
+/** Returns the HTTP status too — a 403 here is the demo's centrepiece. */
+export async function approve(
+  approvalId: string,
+  body: Record<string, unknown> = {},
+): Promise<{ status: number; body: PolicyDecision & { approved: boolean; error?: string } }> {
+  const r = await fetch(`${base}/approvals/${approvalId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, body: await r.json() };
+}
+
+export async function resetApproval(approvalId: string) {
+  return (await fetch(`${base}/approvals/${approvalId}/reset`, { method: "POST" })).json();
+}
+
+export async function issueChallenge(sessionId: string | null, approvalId: string) {
+  return (await fetch(`${base}/verification/challenge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, approval_id: approvalId }),
+  })).json();
+}
+
+export async function respondToChallenge(verificationId: string, file: File) {
+  const fd = new FormData();
+  fd.append("audio", file);
+  return (await fetch(`${base}/verification/${verificationId}/respond`, {
+    method: "POST",
+    body: fd,
+  })).json();
+}
+
+export async function simulatedVerification(
+  sessionId: string | null,
+  method: string,
+  outcome = "passed",
+) {
+  return (await fetch(`${base}/verification/simulated`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, method, outcome }),
+  })).json();
+}
+
+export async function getVerifications(sessionId?: string): Promise<{ verifications: Verification[] }> {
+  const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  return (await fetch(`${base}/verification${q}`)).json();
+}
+
+export async function getIncidents(band?: string): Promise<{ incidents: Incident[] }> {
+  const q = band ? `?band=${band}` : "";
+  return (await fetch(`${base}/incidents${q}`)).json();
+}

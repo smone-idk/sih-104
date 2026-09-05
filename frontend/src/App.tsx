@@ -3,6 +3,8 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { getHealth, getInventory, type Health, type InventoryReport } from "./api";
 import { KindBadge } from "./components/common";
 import LiveAnalysis from "./pages/LiveAnalysis";
+import Approvals from "./pages/Approvals";
+import Incidents from "./pages/Incidents";
 
 function SystemPage() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -68,6 +70,8 @@ function SystemPage() {
 
 const NAV = [
   { to: "/live", label: "Live Analysis" },
+  { to: "/approvals", label: "Approvals" },
+  { to: "/incidents", label: "Incidents" },
   { to: "/system", label: "System" },
 ];
 
@@ -107,6 +111,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/live" replace />} />
           <Route path="/live" element={<LiveAnalysis />} />
+          <Route path="/approvals" element={<Approvals />} />
+          <Route path="/incidents" element={<Incidents />} />
           <Route path="/system" element={<SystemPage />} />
         </Routes>
       </main>
