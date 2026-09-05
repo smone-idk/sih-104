@@ -398,9 +398,77 @@ _(updated at the end of each build phase)_
   - **Short clips get little context.** Utterances shorter than
     `asr_min_segment_seconds` produce no transcript, so a ~6 s clip can score on
     acoustics alone (the family-emergency scenario lands MEDIUM with 0 quotes).
+  - **Measured: context can push a fraud call's score DOWN.** Bank OTP (clone)
+    scores 58.8 with context off and **45.5** with it on. The cause is weight
+    redistribution, not a weak signal averaging things down:
+
+    | component | context OFF | context ON |
+    |---|---|---|
+    | voice_authenticity | eff. weight 0.500 → **50.0 pts** | eff. weight 0.300 → **30.0 pts** |
+    | caller_trust | unavailable (weight redistributed) | 0.970 → +9.7 pts |
+    | behavioural_risk | unavailable | 0.050 → +0.5 pts |
+    | transaction_context | unavailable | **0.000 → +0.0 pts, holding 0.20 weight** |
+
+    With three context components unavailable, the acoustic layers renormalise
+    to 1.0 and voice_authenticity carries 0.50. Turning context on dilutes it to
+    0.30 — a 20-point loss — while context returns only 10.2. The specific
+    offender is `transaction_context`: **20 % of the score budget assigned to a
+    component that found nothing.** Fusion currently cannot distinguish "this
+    layer looked and found nothing" from "this layer found an absence of risk",
+    and treats an available-but-zero component as evidence of safety.
+    The `CLONED_VOICE` band floor masks the outcome here, but a judge reading
+    the explainability table on an OTP scam sees context contributing nothing
+    while diluting real evidence. **Not yet fixed — diagnosed only.**
+  - **Two coverage gaps compound that.** (a) Scenarios point at `_p1` chunks,
+    which hold only the call opening; the fraud payload (the OTP ask, the money
+    demand) is in `_p2`/`_p3`. Per chunk only 1–2 signals fire, against 4–6 on
+    the full script. (b) There is **no government-impersonation vocabulary at
+    all**: *summons, penalty, case number, warrant, arrest, notice, legal
+    action, court, fine, investigation, FIR, police* — 14/14 terms match no
+    pattern in any lexicon. The govt-summons scenario fires only via
+    `law_enforcement` ("Inspector Verma") and `national_id` ("Aadhaar"); there
+    is no threat/coercion signal family. **Not yet fixed — measured only.**
   - **Hindi/Punjabi lexicons exist but are untested** — a handful of Hinglish
     terms are in the patterns, with no Hindi/Punjabi audio in the corpus to
     exercise them. Do not read their presence as language support.
+- **Measured: Whisper ASR error by tier** (`scripts/measure_wer.py`, ground
+  truth is LibriSpeech's own `*.trans.txt` for genuine and the exact script text
+  given to Piper/XTTS for the attack tiers; `faster-whisper small`, float16, CUDA):
+
+  | tier | clips | ref words | WER | content error (S+D) | insertions |
+  |---|---|---|---|---|---|
+  | genuine (LibriSpeech) | 32 | 732 | **4.5 %** | 4.1 % | 0.4 % |
+  | Piper synthetic | 15 | 431 | **4.6 %** | 3.9 % | 0.7 % |
+  | XTTS cloned | 15 | 431 | **23.4 %** | **3.0 %** | **20.4 %** |
+
+  Cloned speech has 5.2× the headline WER — but the breakdown inverts the naive
+  reading. **Substitution + deletion error on clones (3.0 %) is LOWER than on
+  genuine speech (4.1 %)**: Whisper hears the scripted words *more* accurately on
+  XTTS output than on real audiobook audio. The entire gap is **88 hallucinated
+  insertions**, concentrated on short clips (`cloned_genuine_control_en_p3`:
+  15 reference words, 17 insertions, 113 % WER) — consistent with XTTS emitting
+  babble artifacts after short generations, which Whisper dutifully transcribes.
+
+  Consequence for the context engine, stated precisely: **signal recall is
+  largely intact** (trigger phrases survive, which is why the cloned CEO call
+  still produces 5 correct quotes), but hallucinated text is a **false-positive
+  surface** — invented words could match a lexicon pattern and produce a quote
+  that was never spoken. We have not observed that yet and have not measured its
+  rate. This is an upstream Whisper/XTTS interaction, not a defect we introduced.
+
+- **Decision: the context engine is regex-only, deliberately.** §5 called for
+  "rule + regex + small classifier". We built the rules and regex and
+  **chose not to add the classifier**, rather than leaving it as an unmet item.
+  A small classifier would have to be trained on the only labelled data we
+  have — our own five scam scripts — which means it would learn those scripts
+  and report confident probabilities with no basis for generalisation, and its
+  output could not be traced to a span. A regex that fires produces the exact
+  quote, its timestamp, and the named rule; a judge can read the pattern and
+  disagree with it. Transparent and auditable beats confident and ungrounded at
+  this scale. The classifier becomes worth building when there is labelled
+  fraud-call data to fit it on — that is a data problem, not a code one, and it
+  is on the production roadmap.
+
 - **Corpus, as built (v1):**
 
   | tier | clips | total | min / median / max | native sr |
