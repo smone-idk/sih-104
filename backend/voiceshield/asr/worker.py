@@ -41,6 +41,12 @@ class TranscriptSegment:
     #: so a context match can be traced back to the exact utterance and time.
     char_start: int = 0
     char_end: int = 0
+    #: False => below the ASR confidence gate. The segment is still transcribed,
+    #: still shown in the UI and still stored — it just does not reach the
+    #: context engine, so it can never produce a quote. Dropping it silently
+    #: would hide why a signal is missing.
+    confident: bool = True
+    gate_reason: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -55,6 +61,8 @@ class TranscriptSegment:
             "latency_ms": round(self.latency_ms, 1),
             "char_start": self.char_start,
             "char_end": self.char_end,
+            "confident": self.confident,
+            "gate_reason": self.gate_reason,
         }
 
 
@@ -166,15 +174,46 @@ class AsrWorker:
             return []
 
 
+def gate_segment(sg: TranscriptSegment, settings=None) -> tuple[bool, str]:
+    """Should this segment be trusted enough to feed the context engine?
+
+    Whisper invents words on XTTS-cloned audio (see LIMITATIONS.md §7), and an
+    invented word matching a context rule produces a flag quoting speech nobody
+    made. Thresholds are Settings values, chosen by sweeping against ground
+    truth — not literals.
+    """
+    s = settings or get_settings()
+    if not s.asr_confidence_gate:
+        return True, ""
+    if sg.avg_logprob < s.asr_min_avg_logprob:
+        return False, (f"low ASR confidence (avg_logprob {sg.avg_logprob:.2f} "
+                       f"< {s.asr_min_avg_logprob})")
+    if sg.no_speech_prob > s.asr_max_no_speech_prob:
+        return False, (f"likely non-speech (no_speech_prob {sg.no_speech_prob:.2f} "
+                       f"> {s.asr_max_no_speech_prob})")
+    return True, ""
+
+
 @dataclass
 class Transcript:
     """Rolling transcript with char offsets, so every context match can point
-    at the exact quote AND the utterance it came from."""
+    at the exact quote AND the utterance it came from.
+
+    `text` contains ONLY confident segments — that is what the context engine
+    reads. Low-confidence segments stay in `segments` flagged `confident=False`
+    so the UI can show them as discarded rather than making them vanish.
+    """
     segments: list[TranscriptSegment] = field(default_factory=list)
     text: str = ""
 
-    def add(self, segs: list[TranscriptSegment]) -> None:
+    def add(self, segs: list[TranscriptSegment], settings=None) -> None:
         for sg in segs:
+            sg.confident, sg.gate_reason = gate_segment(sg, settings)
+            if not sg.confident:
+                # not part of `text`, so it can never yield a context quote
+                sg.char_start = sg.char_end = len(self.text)
+                self.segments.append(sg)
+                continue
             if self.text:
                 self.text += " "
             sg.char_start = len(self.text)
@@ -182,9 +221,13 @@ class Transcript:
             sg.char_end = len(self.text)
             self.segments.append(sg)
 
+    @property
+    def discarded(self) -> list[TranscriptSegment]:
+        return [s for s in self.segments if not s.confident]
+
     def segment_at(self, char_pos: int) -> TranscriptSegment | None:
         for sg in self.segments:
-            if sg.char_start <= char_pos < sg.char_end:
+            if sg.confident and sg.char_start <= char_pos < sg.char_end:
                 return sg
         return None
 
@@ -193,5 +236,11 @@ class Transcript:
             "text": self.text,
             "segments": [s.as_dict() for s in self.segments],
             "n_segments": len(self.segments),
+            "n_discarded": len(self.discarded),
             "duration_s": round(self.segments[-1].t_end, 2) if self.segments else 0.0,
+            "gate": {
+                "enabled": get_settings().asr_confidence_gate,
+                "min_avg_logprob": get_settings().asr_min_avg_logprob,
+                "max_no_speech_prob": get_settings().asr_max_no_speech_prob,
+            },
         }

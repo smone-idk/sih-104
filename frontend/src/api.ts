@@ -128,14 +128,23 @@ export interface TranscriptSegmentData {
   t_end: number;
   text: string;
   language: string;
+  avg_logprob: number;
   no_speech_prob: number;
+  confident: boolean;
+  gate_reason: string;
 }
 
 export interface TranscriptData {
   text: string;
   segments: TranscriptSegmentData[];
   n_segments: number;
+  n_discarded: number;
   duration_s: number;
+  gate: {
+    enabled: boolean;
+    min_avg_logprob: number;
+    max_no_speech_prob: number;
+  };
 }
 
 export interface ContextData {

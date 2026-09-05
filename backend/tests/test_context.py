@@ -151,13 +151,13 @@ def test_caller_trust_from_directory():
 
 
 def test_behavioural_risk_carries_its_parts():
-    from voiceshield.context.engine import BEHAVIOURAL_WEIGHTS
+    from voiceshield.context.engine import BEHAVIOURAL_STRENGTH
 
     res = analyze_context(_transcript(CEO), None)
     br = res.components["behavioural_risk"]
     assert br["available"] and br["value"] > 0
     parts = br["detail"]["parts"]
-    assert set(parts) == set(BEHAVIOURAL_WEIGHTS)
+    assert set(parts) == set(BEHAVIOURAL_STRENGTH)
     for p in parts.values():
         if p["value"] > 0:
             assert p["quotes"], "a contributing part must carry its quotes"
@@ -259,3 +259,119 @@ def test_long_segment_is_split_under_the_max():
 
 def test_no_segments_gives_no_utterances():
     assert utterances_from_segments([], get_settings()) == []
+
+
+# --- ASR confidence gate (§5) ------------------------------------------
+def test_low_confidence_segment_never_reaches_the_context_engine():
+    """Whisper invents words on cloned audio; an invented word matching a rule
+    would quote speech nobody made. A gated segment is excluded from the text
+    the context engine reads."""
+    s = get_settings()
+    t = Transcript()
+    t.add([
+        TranscriptSegment(0, 0.0, 4.0, "Nothing urgent, call me back whenever.",
+                          avg_logprob=-0.2),
+        TranscriptSegment(1, 4.0, 6.0, "transfer 25 lakh right now immediately",
+                          avg_logprob=s.asr_min_avg_logprob - 0.5),
+    ])
+    assert "25 lakh" not in t.text
+    assert len(t.discarded) == 1
+    for name, sig in extract_all(t.text).items():
+        assert sig.value == 0, f"{name} fired on gated text"
+
+
+def test_discarded_segments_stay_visible_with_a_reason():
+    """Silently dropping them would hide why a signal is missing."""
+    s = get_settings()
+    t = Transcript()
+    t.add([TranscriptSegment(0, 0.0, 2.0, "mumble",
+                             avg_logprob=s.asr_min_avg_logprob - 1.0)])
+    d = t.as_dict()
+    assert d["n_segments"] == 1 and d["n_discarded"] == 1
+    seg = d["segments"][0]
+    assert seg["confident"] is False
+    assert "low ASR confidence" in seg["gate_reason"]
+    assert d["gate"]["enabled"] is True
+
+
+def test_high_no_speech_prob_is_gated():
+    s = get_settings()
+    t = Transcript()
+    t.add([TranscriptSegment(0, 0.0, 2.0, "transfer money now",
+                             avg_logprob=-0.1,
+                             no_speech_prob=s.asr_max_no_speech_prob + 0.1)])
+    assert t.text == ""
+    assert "non-speech" in t.discarded[0].gate_reason
+
+
+def test_gate_can_be_disabled_and_thresholds_are_config():
+    s = get_settings().model_copy(update={"asr_confidence_gate": False})
+    t = Transcript()
+    t.add([TranscriptSegment(0, 0.0, 2.0, "transfer 25 lakh", avg_logprob=-9.0)],
+          settings=s)
+    assert "25 lakh" in t.text and not t.discarded
+
+
+def test_gated_segment_cannot_be_cited_as_a_quote():
+    """segment_at() must never resolve into a discarded segment."""
+    s = get_settings()
+    t = Transcript()
+    t.add([
+        TranscriptSegment(0, 0.0, 3.0, "please transfer 25 lakh rupees today",
+                          avg_logprob=-0.1),
+        TranscriptSegment(1, 3.0, 5.0, "garbled", avg_logprob=-9.0),
+    ])
+    res = analyze_context(t, None)
+    for q in res.quotes():
+        assert q["utterance_index"] != 1
+    assert all(sg.confident for sg in t.segments if sg.char_end > sg.char_start)
+
+
+def test_transfer_verb_accepts_spelled_out_numbers():
+    """'move 25 lakh' and 'move twenty-five lakh' are the same sentence; the
+    signal must not depend on how the ASR chose to write the number."""
+    for text in ("move 25 lakh rupees", "move twenty-five lakh rupees"):
+        rules = {m.rule for m in extract_all(text)["transaction_intent"].matches}
+        assert "transfer_verb" in rules, text
+
+
+# --- behavioural_risk combination (decision recorded in LIMITATIONS §7) ---
+def test_one_conclusive_signal_produces_high_behavioural_risk():
+    """A weighted mean gave 0.43 when the caller asks for an OTP outright.
+    Asking for a one-time password is not 25% of a fraud."""
+    res = analyze_context(_transcript(
+        "Please read me the one time password that was just sent to you."), None)
+    br = res.components["behavioural_risk"]
+    assert br["available"] and br["value"] > 0.8, br["value"]
+    assert br["detail"]["combination"] == "noisy-OR"
+
+
+def test_behavioural_risk_is_monotone_in_evidence():
+    """Adding a signal can never lower the risk — the point of noisy-OR."""
+    from voiceshield.context.engine import _behavioural_risk
+    from voiceshield.context.signals import SignalMatch, SignalResult
+
+    def sig(name, v):
+        return SignalResult(name=name, value=v,
+                            matches=[SignalMatch("q", 0, 1, "r")] if v else [])
+
+    one, _, _ = _behavioural_risk({"secrecy": sig("secrecy", 0.5)})
+    two, _, _ = _behavioural_risk({"secrecy": sig("secrecy", 0.5),
+                                   "urgency": sig("urgency", 0.5)})
+    assert two >= one
+
+
+def test_behavioural_risk_stays_zero_on_a_benign_call():
+    """The change must not manufacture risk where there is no evidence."""
+    res = analyze_context(_transcript(BENIGN), None)
+    assert res.components["behavioural_risk"]["available"] is False
+    assert res.components["behavioural_risk"]["value"] == 0.0
+
+
+def test_behavioural_parts_carry_strength_and_quotes():
+    res = analyze_context(_transcript(CEO), None)
+    parts = res.components["behavioural_risk"]["detail"]["parts"]
+    for name, p in parts.items():
+        assert {"value", "strength", "evidence", "quotes"} <= set(p)
+        if p["value"] > 0:
+            assert p["quotes"]

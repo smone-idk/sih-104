@@ -456,6 +456,35 @@ _(updated at the end of each build phase)_
   15 reference words, 17 insertions, 113 % WER) — consistent with XTTS emitting
   babble artifacts after short generations, which Whisper dutifully transcribes.
 
+  **FIXED — an ASR confidence gate now sits in front of the context engine.**
+  Segments below `asr_min_avg_logprob` (or above `asr_max_no_speech_prob`) are
+  transcribed and displayed but never reach the context engine, so they cannot
+  produce a quote. Thresholds are Settings values chosen by **sweeping against
+  ground truth**, not picked by feel:
+
+  | avg_logprob floor | true signals | false signals | true lost | spurious flag gone |
+  |---|---|---|---|---|
+  | ungated | 60 | 1 | 0 | no |
+  | −0.7 | 60 | 1 | 0 | no |
+  | **−0.6 (chosen)** | **60** | **0** | **0** | **yes** |
+  | −0.5 | 59 | 0 | 1 | yes |
+  | −0.4 | 58 | 0 | 2 | yes |
+
+  At −0.6 the gate discards **10.4 % of segments (10 of 96)**, removes the one
+  measured false positive, and loses **zero** true signals. Below −0.6 it starts
+  costing real evidence for no further benefit.
+
+  A discarded segment is shown struck through in the transcript panel, labelled
+  *"discarded — low ASR confidence"*, with the reason on hover — a signal that is
+  missing because of ASR doubt should be visible as such, not silently absent.
+
+  One honest caveat the sweep exposed: Whisper assigns `avg_logprob` per decoding
+  segment, so the hallucinated span and the legitimate *"Thanks talk soon."* that
+  followed it shared the identical score of −0.669. The gate works here because
+  the innocuous neighbour carried no signals — not because it separates
+  hallucination from speech. It is a blunt instrument that happens to be
+  well-calibrated on this corpus.
+
   Consequence for the context engine, stated precisely: **signal recall is
   largely intact** (trigger phrases survive, which is why the cloned CEO call
   still produces correct quotes), but hallucinated text is a **false-positive
@@ -526,6 +555,52 @@ _(updated at the end of each build phase)_
   - **`Reset demo` exists and is labelled.** It returns an approval to pending
     and clears its session, which makes the policy fail closed rather than open.
     It is still a state-changing endpoint with no auth (see above).
+- **DECISION: the fusion weights, owned.** The §6 weight vector was written as
+  a prior before anything was measured. Six scenarios of evidence later, two
+  cases depended on structure we had flagged but not resolved: an outright OTP
+  request was worth 4.3 points of 100, and the govt-summons scenario *fell* from
+  81.6 to 66.5 when real context became available. We chose **(b) — revise, with
+  the reasoning written down** — but scoped it precisely:
+
+  **What changed: how `behavioural_risk` combines, not the six fusion weights.**
+  A weighted mean treats each behavioural signal as a fractional contribution to
+  one latent quantity, so a call must fire nearly everything to score high. That
+  is the wrong model. "Read me the OTP" is not 25 % of a fraud — no legitimate
+  caller asks for a one-time password. These signals are independent evidence,
+  any one of which can be close to sufficient, so they now combine by
+  **noisy-OR**: `risk = 1 − Π(1 − strength_i · value_i)`, with per-signal
+  *evidential strength* (credential 0.85, threat/out-of-workflow 0.70, secrecy
+  0.60, urgency 0.40, authority 0.35) rather than mixing weights. It is monotone,
+  saturates at 1, and reduces to a single signal's strength when only one fires.
+
+  **What did NOT change: the six §6 fusion weights.** Once the aggregation is
+  right they are no longer the binding constraint — govt summons reaches HIGH on
+  score alone. Changing them as well would have been tuning to the demo.
+
+  Measured effect (behavioural_risk is the only thing altered):
+
+  | scenario | before | after | floor needed? |
+  |---|---|---|---|
+  | genuine control | 5.8 LOW | 5.8 LOW | no |
+  | genuine, other speaker | 33.8 LOW | 33.8 LOW | no |
+  | CEO transfer (clone) | 67.7 HIGH *(floored)* | **71.8 HIGH** | **no longer** |
+  | bank OTP (clone) | 55.7 *(floored)* | 60.6 *(floored)* | **yes** |
+  | govt summons | 66.5 **MEDIUM** | **71.3 HIGH** | no |
+  | family emergency | 72.7 HIGH | 76.8 HIGH | no |
+  | benign script, cloned | 50.7 HIGH *(floored)* | 50.7 HIGH *(floored)* | yes |
+
+  Behavioural risk on a benign call stays exactly **0.00** — the change adds
+  sensitivity to evidence, never manufactures it.
+
+  **And the part of (a) that is still true, stated plainly: the band floor
+  remains load-bearing for cloned-voice attacks.** Bank OTP reaches only 60.6 on
+  score. That is not a weighting oversight — it is the clone case the floor
+  exists for. A successful clone of the enrolled speaker legitimately drives
+  `speaker_consistency` to ~0.05, so 0.20 of the weight budget correctly
+  reports "this is who they claim to be". An additive model cannot then also
+  say "…which is exactly what makes this dangerous". We accept that, name it,
+  and carry the rule's reason into the UI rather than hiding it in a coefficient.
+
 - **Phase 5 (profiles, upload, push-to-record):**
   - **A voice embedding is still biometric data.** Deleting a profile removes
     the row, but under DPDP-2023 thinking the harder problem is that a voice

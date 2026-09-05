@@ -63,6 +63,20 @@ class Settings(BaseSettings):
     asr_beam_size: int = 1          # greedy: fast enough to keep the 1 Hz loop clear
     asr_enabled: bool = True
 
+    # --- ASR confidence gate (§5) ---
+    #: Whisper hallucinates words on XTTS-cloned audio, and an invented word can
+    #: match a context rule — producing a flag quoting speech nobody made. A
+    #: segment below this avg_logprob does not reach the context engine.
+    #: Chosen by sweeping against ground truth on the demo corpus: at -0.6 the
+    #: one measured spurious flag disappears and ZERO true signals are lost.
+    #: See LIMITATIONS.md §7 for the sweep table.
+    asr_confidence_gate: bool = True
+    asr_min_avg_logprob: float = -0.6
+    #: upper bound on Whisper's own "this is probably not speech" estimate.
+    #: Does not bind on the demo corpus (max observed 0.218); kept as a guard
+    #: for real deployments with room noise.
+    asr_max_no_speech_prob: float = 0.6
+
     #: fp16 for the SSL anti-spoofing backbone on CUDA (halves its VRAM)
     use_fp16: bool = True
 

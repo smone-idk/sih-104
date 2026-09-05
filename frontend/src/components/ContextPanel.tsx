@@ -152,12 +152,22 @@ export function TranscriptPanel({
 }) {
   const segs = transcript?.segments ?? [];
   const hit = (i: number) => quotes.some((q) => q.utterance_index === i);
+  const dropped = transcript?.n_discarded ?? 0;
   return (
     <Card
       title="Transcript"
       subtitle={`Whisper over VAD-segmented utterances — ${segs.length} utterance(s); acoustic score ticks every 1 s independently`}
       right={<KindBadge kind="pretrained" />}
     >
+      {dropped > 0 && (
+        <p className="mb-2 rounded border border-zinc-300 bg-zinc-50 px-2 py-1 text-[11px] leading-snug text-zinc-700">
+          <strong>{dropped}</strong> segment{dropped === 1 ? "" : "s"} discarded
+          for low ASR confidence (below avg_logprob{" "}
+          {transcript?.gate.min_avg_logprob}). Discarded text is shown struck
+          through and cannot produce a context flag — Whisper invents words on
+          cloned audio, and an invented word can match a rule.
+        </p>
+      )}
       {segs.length === 0 ? (
         <p className="text-xs text-zinc-500">No speech transcribed yet.</p>
       ) : (
@@ -166,13 +176,23 @@ export function TranscriptPanel({
             <li
               key={sg.index}
               className={`rounded px-1.5 py-1 text-[11px] leading-snug ${
-                hit(sg.index) ? "bg-amber-50 text-zinc-900" : "text-zinc-600"
+                !sg.confident
+                  ? "border border-dashed border-zinc-300 bg-zinc-50 text-zinc-400"
+                  : hit(sg.index)
+                    ? "bg-amber-50 text-zinc-900"
+                    : "text-zinc-600"
               }`}
+              title={sg.gate_reason || undefined}
             >
               <span className="mr-1.5 tabular-nums text-zinc-400">
                 {sg.t_start.toFixed(1)}s
               </span>
-              {sg.text}
+              <span className={sg.confident ? "" : "line-through"}>{sg.text}</span>
+              {!sg.confident && (
+                <span className="ml-1.5 rounded bg-zinc-200 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
+                  discarded — low ASR confidence
+                </span>
+              )}
             </li>
           ))}
         </ol>

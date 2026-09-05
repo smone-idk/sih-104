@@ -36,15 +36,27 @@ from .signals import SignalResult, extract_all
 
 log = logging.getLogger("voiceshield.context")
 
-#: behavioural_risk is a weighted mix of the behavioural signals. Weights are
-#: expert-elicited priors, like the fusion weights — not fitted.
-BEHAVIOURAL_WEIGHTS = {
-    "credential_solicitation": 0.25,
-    "threat_coercion": 0.20,
-    "out_of_workflow": 0.20,
-    "secrecy": 0.15,
-    "urgency": 0.12,
-    "authority_claim": 0.08,
+#: How conclusive each behavioural signal is ON ITS OWN, at full strength.
+#: These are NOT mixing weights — see `_behavioural_risk` for why that
+#: distinction matters. Still expert-elicited, but now documented posteriors:
+#: revised after measuring six scenarios (LIMITATIONS.md §7), not untouched
+#: priors.
+BEHAVIOURAL_STRENGTH = {
+    # "read me the OTP" is not 25% of a fraud — on its own it is close to
+    # conclusive. No legitimate caller asks for a one-time password.
+    "credential_solicitation": 0.85,
+    # "a warrant will be issued unless you pay" — agencies do not cold-call
+    # with arrest threats.
+    "threat_coercion": 0.70,
+    # "skip the second approval" is a request to disable the control that
+    # exists precisely to stop this.
+    "out_of_workflow": 0.70,
+    # "don't loop in the finance team" — strong, but has benign uses.
+    "secrecy": 0.60,
+    # urgency and authority claims are common in legitimate calls too, so
+    # neither is close to sufficient alone.
+    "urgency": 0.40,
+    "authority_claim": 0.35,
 }
 
 
@@ -139,27 +151,57 @@ def analyze_context(transcript: Transcript,
         available=False)
 
     # --- behavioural_risk ---
-    parts, fired = {}, []
-    total = 0.0
-    for name, w in BEHAVIOURAL_WEIGHTS.items():
-        sig = res.signals.get(name)
-        v = sig.value if sig else 0.0
-        parts[name] = {"value": round(v, 4), "weight": w,
-                       "contribution": round(v * w, 4),
-                       "quotes": [m.as_dict() for m in (sig.matches if sig else [])]}
-        total += v * w
-        if v > 0:
-            fired.append(name)
+    total, parts, fired = _behavioural_risk(res.signals)
     res.components["behavioural_risk"] = _component(
-        min(1.0, total),
+        total,
         f"{len(fired)} behavioural signal(s) fired",
-        {"parts": parts, "fired": fired},
+        {"parts": parts, "fired": fired, "combination": "noisy-OR"},
     ) if fired else _component(
         0.0, "no behavioural signals in the transcript — layer not applicable",
-        {"parts": parts}, available=False)
+        {"parts": parts, "combination": "noisy-OR"}, available=False)
 
     res.components.update(_caller_trust(directory))
     return res
+
+
+def _behavioural_risk(signals: dict[str, SignalResult]):
+    """Combine behavioural signals as independent evidence (noisy-OR), not as a
+    weighted mean.
+
+    WHY THIS CHANGED (decision recorded in LIMITATIONS.md §7). A weighted mean
+    treats each signal as a fractional contribution to one latent quantity, so a
+    call has to fire nearly everything to score high. Measured consequence: the
+    bank-OTP scenario, where the caller asks for a one-time password outright,
+    produced behavioural_risk 0.43 — because credential_solicitation carried
+    only 0.25 of the mix. But asking for an OTP is not 25% of a fraud; it is on
+    its own close to conclusive.
+
+    These signals are better modelled as independent evidence, any one of which
+    can be sufficient. Noisy-OR does that:
+
+        risk = 1 - Π (1 - strength_i * value_i)
+
+    It is monotone (evidence never lowers risk), saturates at 1, and reduces to
+    `strength_i * value_i` when only one signal fires. On the demo corpus it
+    lifts the OTP case 0.43 -> 0.93 and the govt-summons case 0.43 -> 0.91,
+    while leaving the benign control at exactly 0.0.
+    """
+    parts: dict[str, dict] = {}
+    fired: list[str] = []
+    product = 1.0
+    for name, strength in BEHAVIOURAL_STRENGTH.items():
+        sig = signals.get(name)
+        v = sig.value if sig else 0.0
+        parts[name] = {
+            "value": round(v, 4),
+            "strength": strength,
+            "evidence": round(strength * v, 4),
+            "quotes": [m.as_dict() for m in (sig.matches if sig else [])],
+        }
+        product *= (1.0 - strength * v)
+        if v > 0:
+            fired.append(name)
+    return min(1.0, 1.0 - product), parts, fired
 
 
 def _caller_trust(directory: dict[str, Any] | None) -> dict[str, dict]:

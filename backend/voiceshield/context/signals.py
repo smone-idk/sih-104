@@ -174,7 +174,10 @@ AUTHORITY = [
 ]
 
 TRANSACTION = [
-    ("transfer_verb", r"\b(transfer|wire|remit|send|release|process|make|move|push|pay)\s+(?:the\s+|a\s+|this\s+|out\s+)?(?:payment|amount|funds?|money|sum|₹|rs\.?|\d)"),
+    # accepts digits AND spelled-out numbers: "move 25 lakh" and
+    # "move twenty-five lakh" must both fire, or the same sentence scores
+    # differently depending on how the ASR chose to write the number.
+    ("transfer_verb", rf"\b(transfer|wire|remit|send|release|process|make|move|push|pay)\s+(?:the\s+|a\s+|this\s+|out\s+)?(?:payment|amount|funds?|money|sum|₹|rs\.?|inr|rupees?|\d|(?:{_TENS_RE})|(?:{_ONES_RE}))"),
     ("payment_noun", r"\b(fund transfer|wire transfer|payment|remittance|beneficiary|neft|rtgs|imps|upi)\b"),
     ("account_change", r"\b(new (?:account|beneficiary|vendor)|different account|updated (?:bank )?details|change (?:the )?account)\b"),
 ]
